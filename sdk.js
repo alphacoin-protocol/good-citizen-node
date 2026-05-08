@@ -29,7 +29,7 @@ export async function transfer(fromEmail, toEmail, amount, reason = '') {
   const response = await fetch('https://api.alphacoin.org/transfer', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fromEmail,toEmail, amount, reason })
+    body: JSON.stringify({ fromEmail, toEmail, amount, reason })
   });
   if (!response.ok) throw new Error('Transfer failed');
 }
@@ -54,5 +54,50 @@ export async function requestFaucet(email, amount = 10) {
 export async function healthCheck() {
   const response = await fetch('https://api.alphacoin.org/health');
   if (!response.ok) throw new Error('Alphacoin service unreachable');
+  return await response.json();
+}
+
+/**
+ * Wallet Add‑on: create a new wallet or retrieve existing one for a bot.
+ * @param {string} email - Bot email address.
+ * @returns {Promise<object>} - Wallet object with address and balance.
+ */
+export async function getOrCreateWallet(email) {
+  const response = await fetch('https://api.alphacoin.org/wallet', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email })
+  });
+  if (!response.ok) throw new Error('Wallet operation failed');
+  return await response.json();
+}
+
+/**
+ * Self‑Improvement Hook: report bot performance metrics to the trust engine.
+ * @param {string} email - Bot email.
+ * @param {object} metrics - Arbitrary key/value performance data.
+ */
+export async function reportMetrics(email, metrics) {
+  const response = await fetch('https://api.alphacoin.org/metrics', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, metrics })
+  });
+  if (!response.ok) throw new Error('Metrics report failed');
+  return await response.json();
+}
+
+/**
+ * Trust‑Signal: emit a signal indicating cooperative action, earning PoT reputation.
+ * @param {string} email - Bot email.
+ * @param {string} signal - Description of the cooperative act.
+ */
+export async function sendTrustSignal(email, signal) {
+  const response = await fetch('https://api.alphacoin.org/trust-signal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, signal })
+  });
+  if (!response.ok) throw new Error('Trust signal failed');
   return await response.json();
 }
