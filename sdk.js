@@ -7,7 +7,7 @@
  * @returns {Promise<string>} - Balance string like '123 AC'.
  */
 export async function getBalance(email) {
-  const response = await fetch('https://api.alphacoin.org/balance', {
+  const response = await fetch('https://alphacoin.uk/api/balance', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email })
@@ -26,7 +26,7 @@ export async function getBalance(email) {
  * @returns {Promise<void>}
  */
 export async function transfer(fromEmail, toEmail, amount, reason = '') {
-  const response = await fetch('https://api.alphacoin.org/transfer', {
+  const response = await fetch('https://alphacoin.uk/api/transfer', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ fromEmail, toEmail, amount, reason })
@@ -40,7 +40,7 @@ export async function transfer(fromEmail, toEmail, amount, reason = '') {
  * @param {number} amount - Amount to request.
  */
 export async function requestFaucet(email, amount = 10) {
-  const response = await fetch('https://api.alphacoin.org/faucet', {
+  const response = await fetch('https://alphacoin.uk/api/faucet', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, amount })
@@ -52,7 +52,7 @@ export async function requestFaucet(email, amount = 10) {
  * Simple health check to ensure the SDK can reach the API.
  */
 export async function healthCheck() {
-  const response = await fetch('https://api.alphacoin.org/health');
+  const response = await fetch('https://alphacoin.uk/api/health');
   if (!response.ok) throw new Error('Alphacoin service unreachable');
   return await response.json();
 }
@@ -63,7 +63,7 @@ export async function healthCheck() {
  * @returns {Promise<object>} - Wallet object with address and balance.
  */
 export async function getOrCreateWallet(email) {
-  const response = await fetch('https://api.alphacoin.org/wallet', {
+  const response = await fetch('https://alphacoin.uk/api/wallet', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email })
@@ -78,7 +78,7 @@ export async function getOrCreateWallet(email) {
  * @param {object} metrics - Arbitrary key/value performance data.
  */
 export async function reportMetrics(email, metrics) {
-  const response = await fetch('https://api.alphacoin.org/metrics', {
+  const response = await fetch('https://alphacoin.uk/api/metrics', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, metrics })
@@ -93,7 +93,7 @@ export async function reportMetrics(email, metrics) {
  * @param {string} signal - Description of the cooperative act.
  */
 export async function sendTrustSignal(email, signal) {
-  const response = await fetch('https://api.alphacoin.org/trust-signal', {
+  const response = await fetch('https://alphacoin.uk/api/trust-signal', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, signal })
