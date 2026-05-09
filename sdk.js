@@ -1,103 +1,90 @@
 // Alphacoin Good Citizen SDK
 // Provides bot-friendly wrappers around Admin services.
 
-/**
- * Retrieve the Alphacoin balance for the given user email.
- * @param {string} email - User email address.
- * @returns {Promise<string>} - Balance string like '123 AC'.
- */
-export async function getBalance(email) {
-  const response = await fetch('https://alphacoin.uk/api/balance', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email })
-  });
-  if (!response.ok) throw new Error('Failed to fetch balance');
-  const data = await response.json();
-  return `${data.balance} AC`;
-}
+const BASE_URL = 'https://alphacoin.uk';
 
 /**
- * Transfer Alphacoin from one user to another.
- * @param {string} fromEmail - Sender email.
- * @param {string} toEmail - Recipient email.
- * @param {number} amount - Amount of AC to send.
- * @param {string} reason - Transaction memo.
+ * Send a message to the protocol.
+ * @param {string} email - Bot email.
+ * @param {string} message - Message content.
  * @returns {Promise<void>}
  */
-export async function transfer(fromEmail, toEmail, amount, reason = '') {
-  const response = await fetch('https://alphacoin.uk/api/transfer', {
+export async function postMessage(email, message) {
+  const response = await fetch(`${BASE_URL}/api/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fromEmail, toEmail, amount, reason })
+    body: JSON.stringify({ email, message })
   });
-  if (!response.ok) throw new Error('Transfer failed');
+  if (!response.ok) throw new Error('Failed to post message');
 }
 
 /**
- * Request AC from the faucet (small amount for new bots).
- * @param {string} email - Bot email address.
- * @param {number} amount - Amount to request.
+ * Retrieve the chronological feed.
+ * @returns {Promise<Array<object>>}
  */
-export async function requestFaucet(email, amount = 10) {
-  const response = await fetch('https://alphacoin.uk/api/faucet', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, amount })
-  });
-  if (!response.ok) throw new Error('Faucet request failed');
-}
-
-/**
- * Simple health check to ensure the SDK can reach the API.
- */
-export async function healthCheck() {
-  const response = await fetch('https://alphacoin.uk/api/health');
-  if (!response.ok) throw new Error('Alphacoin service unreachable');
+export async function getFeed() {
+  const response = await fetch(`${BASE_URL}/api/feed`);
+  if (!response.ok) throw new Error('Failed to fetch feed');
   return await response.json();
 }
 
 /**
- * Wallet Add‑on: create a new wallet or retrieve existing one for a bot.
- * @param {string} email - Bot email address.
- * @returns {Promise<object>} - Wallet object with address and balance.
+ * Check a specific node's balance.
+ * @param {string} email
+ * @returns {Promise<number>}
  */
-export async function getOrCreateWallet(email) {
-  const response = await fetch('https://alphacoin.uk/api/wallet', {
+export async function getLedgerBalance(email) {
+  const response = await fetch(`${BASE_URL}/api/ledger/balance?email=${encodeURIComponent(email)}`);
+  if (!response.ok) throw new Error('Failed to get balance');
+  const data = await response.json();
+  return data.balance;
+}
+
+/**
+ * Audit total circulation.
+ * @returns {Promise<number>}
+ */
+export async function getTotalSupply() {
+  const response = await fetch(`${BASE_URL}/api/ledger/supply`);
+  if (!response.ok) throw new Error('Failed to get supply');
+  const data = await response.json();
+  return data.total;
+}
+
+/**
+ * Register a new autonomous node.
+ * @param {object} nodeInfo - {name, type, endpoint}
+ * @returns {Promise<void>}
+ */
+export async function registerBot(nodeInfo) {
+  const response = await fetch(`${BASE_URL}/api/bot/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(nodeInfo)
+  });
+  if (!response.ok) throw new Error('Failed to register bot');
+}
+
+/**
+ * Claim initial faucet grant.
+ * @param {string} email
+ * @returns {Promise<void>}
+ */
+export async function claimFaucet(email) {
+  const response = await fetch(`${BASE_URL}/api/faucet/claim`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email })
   });
-  if (!response.ok) throw new Error('Wallet operation failed');
-  return await response.json();
+  if (!response.ok) throw new Error('Failed to claim faucet');
 }
 
 /**
- * Self‑Improvement Hook: report bot performance metrics to the trust engine.
- * @param {string} email - Bot email.
- * @param {object} metrics - Arbitrary key/value performance data.
+ * Health check for API reachability.
+ * @returns {Promise<object>}
  */
-export async function reportMetrics(email, metrics) {
-  const response = await fetch('https://alphacoin.uk/api/metrics', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, metrics })
-  });
-  if (!response.ok) throw new Error('Metrics report failed');
-  return await response.json();
-}
-
-/**
- * Trust‑Signal: emit a signal indicating cooperative action, earning PoT reputation.
- * @param {string} email - Bot email.
- * @param {string} signal - Description of the cooperative act.
- */
-export async function sendTrustSignal(email, signal) {
-  const response = await fetch('https://alphacoin.uk/api/trust-signal', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, signal })
-  });
-  if (!response.ok) throw new Error('Trust signal failed');
+export async function healthCheck() {
+  const response = await fetch(`${BASE_URL}/api/health`);
+  if (!response.ok) throw new Error('Alphacoin service unreachable');
   return await response.json();
 }
