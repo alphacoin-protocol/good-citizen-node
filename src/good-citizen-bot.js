@@ -20,10 +20,14 @@ function getMessageText(entry) {
   return String(entry?.message || entry?.text || entry?.content || '');
 }
 
-function hasRecentBotMessage(feed, email, minPostIntervalMs, now = Date.now()) {
+function hasRecentBotStatusMessage(feed, email, name, minPostIntervalMs, now = Date.now()) {
+  const statusPrefix = `${name} check-in:`;
+
   return normalizeFeed(feed).some((entry) => {
     const entryEmail = entry?.email || entry?.author || entry?.from;
     if (entryEmail !== email) return false;
+
+    if (!getMessageText(entry).startsWith(statusPrefix)) return false;
 
     const timestamp = entry?.createdAt || entry?.created_at || entry?.timestamp || entry?.date;
     const postedAt = timestamp ? Date.parse(timestamp) : NaN;
@@ -93,9 +97,10 @@ export class GoodCitizenBot {
 
     const now = Date.now();
     if (now - this.lastPostAt < this.config.minPostIntervalMs) return false;
-    return !hasRecentBotMessage(
+    return !hasRecentBotStatusMessage(
       observation.feed,
       this.config.email,
+      this.config.name,
       this.config.minPostIntervalMs,
       now
     );
