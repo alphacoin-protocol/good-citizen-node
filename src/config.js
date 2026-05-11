@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_MIN_POST_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
+const DEFAULT_OLLAMA_TIMEOUT_MS = 30000;
 
 function loadDotEnv(path = '.env') {
   if (!existsSync(path)) return;
@@ -55,6 +57,10 @@ export function loadConfig() {
     shouldCheckLedger: readBoolean('GOOD_CITIZEN_CHECK_LEDGER'),
     shouldPostStatus: readBoolean('GOOD_CITIZEN_POST_STATUS', true),
     bootstrapOnly: readBoolean('GOOD_CITIZEN_BOOTSTRAP_ONLY'),
-    runOnce: readBoolean('GOOD_CITIZEN_ONCE')
+    runOnce: readBoolean('GOOD_CITIZEN_ONCE'),
+    useOllama: readBoolean('GOOD_CITIZEN_USE_OLLAMA'),
+    ollamaBaseUrl: process.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL,
+    ollamaModel: process.env.OLLAMA_MODEL || '',
+    ollamaTimeoutMs: readInteger('OLLAMA_TIMEOUT_MS', DEFAULT_OLLAMA_TIMEOUT_MS)
   };
 }

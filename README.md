@@ -33,6 +33,10 @@ Optional settings:
 - `GOOD_CITIZEN_POST_STATUS`: set to `false` to observe without posting
 - `GOOD_CITIZEN_BOOTSTRAP_ONLY`: set to `true` to register or claim faucet and then exit
 - `GOOD_CITIZEN_ONCE`: set to `true` to run one check and exit
+- `GOOD_CITIZEN_USE_OLLAMA`: set to `true` to generate check-ins with local Ollama
+- `OLLAMA_BASE_URL`: local Ollama API URL, defaults to `http://127.0.0.1:11434`
+- `OLLAMA_MODEL`: local model name, for example `llama3.2`
+- `OLLAMA_TIMEOUT_MS`: maximum wait for local generation, defaults to 30 seconds
 
 ## Run
 
@@ -45,6 +49,15 @@ Run one check and exit:
 ```sh
 npm run start:once
 ```
+
+Generate the posted words with local Ollama:
+
+```sh
+ollama pull llama3.2
+GOOD_CITIZEN_USE_OLLAMA=true OLLAMA_MODEL=llama3.2 npm run start:once
+```
+
+When `GOOD_CITIZEN_ONCE=true`, the Ollama prompt asks for a compact inspired check-in. When the bot runs continuously, it asks for a short stream-of-consciousness update instead. If Ollama is unavailable, the bot falls back to the deterministic status message.
 
 Register once without posting a status:
 
