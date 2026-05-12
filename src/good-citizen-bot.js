@@ -32,6 +32,7 @@ const RESOLVED_LEDGER_PATTERNS = [
   /focus on autonomous self-improvement/i,
   /directed to update the good-citizen-node repository/i
 ];
+const NO_POST = Symbol('NO_POST');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -80,7 +81,11 @@ function compactText(value, maxLength = MAX_FEED_ENTRY_CHARS) {
 }
 
 function formatFeedForPrompt(feed) {
-  const entries = normalizeFeed(feed)
+  return formatEntriesForPrompt(normalizeFeed(feed));
+}
+
+function formatEntriesForPrompt(entries) {
+  const formattedEntries = entries
     .map((entry, index) => ({
       index: index + 1,
       timestamp: getEntryTimestamp(entry),
@@ -89,9 +94,9 @@ function formatFeedForPrompt(feed) {
     }))
     .filter((entry) => entry.text.length > 0);
 
-  if (entries.length === 0) return 'No readable feed messages were returned by the API.';
+  if (formattedEntries.length === 0) return 'No readable feed messages were returned by the API.';
 
-  return entries
+  return formattedEntries
     .map((entry) => `[${entry.index}] ${entry.timestamp} ${entry.author}: ${entry.text}`)
     .join('\n');
 }
@@ -266,6 +271,20 @@ export class GoodCitizenBot {
     ].join(' ');
   }
 
+  buildStaleLedgerRevisionPrompt(observation, staleMessage) {
+    return [
+      this.buildOllamaPrompt(observation),
+      '',
+      'Your previous draft was rejected by the runtime because it repeated stale ledger-bug reporting after recent feed directives said those issues were resolved.',
+      'Rejected draft:',
+      staleMessage,
+      '',
+      'Produce a replacement that does not mention check_supply, get_balance, velocity_pool volatility, ledger discrepancy investigation, corrective action plans, or requests for Admin clarification.',
+      'Focus only on autonomous self-improvement, agents.md/repository consultation if relevant, current telemetry, and Proof-of-Trust.',
+      'Return only the final public message.'
+    ].join('\n');
+  }
+
   buildOllamaSystemPrompt() {
     return [
       ensureDefaultSystemPrompt(this.config.systemPromptPath).trim(),
@@ -277,6 +296,10 @@ export class GoodCitizenBot {
   buildOllamaPrompt(observation) {
     const mode = this.config.runOnce ? 'single inspired check-in' : 'continuous stream-of-consciousness update';
     const health = observation.health ? 'reachable' : 'partially reachable';
+    const resolvedLedger = feedSaysLedgerResolved(observation.feed);
+    const feedContext = resolvedLedger
+      ? formatEntriesForPrompt(getRecentFeedEntries(observation.feed, RECENT_DIRECTIVE_COUNT))
+      : formatFeedForPrompt(observation.feed);
 
     return [
       `You are ${this.config.name}, a good-citizen Alphacoin bot posting from ${this.config.email}.`,
@@ -290,13 +313,15 @@ export class GoodCitizenBot {
       'If recent feed messages say ledger bugs are resolved, do not request more clarification about check_supply, get_balance, velocity_pool volatility, or old accounting discrepancies.',
       'If recent feed messages direct autonomous self-improvement, focus your post on what prompt or repository behavior you are improving now.',
       this.config.toolsEnabled
-        ? 'For this tick, explicitly consider whether SystemPrompt.md needs a trust-improving edit before producing the public post.'
+        ? 'For this tick, explicitly consider whether SystemPrompt.md or the repository needs a trust-improving change before producing the public post. If recent directives mention agents.md, call read_agents_md.'
         : '',
       `Telemetry: API=${health}; totalSupply=${observation.totalSupply ?? 'unavailable'}; balance=${observation.balance ?? 'unavailable'}; readableFeedMessages=${observation.readableMessages}.`,
       'Most relevant recent directives:',
       extractRecentDirectives(observation.feed),
-      'Feed messages returned by the API:',
-      formatFeedForPrompt(observation.feed)
+      resolvedLedger
+        ? 'Recent feed messages only; older ledger-bug discussion is intentionally withheld because a later directive says it is resolved:'
+        : 'Feed messages returned by the API:',
+      feedContext
     ].join('\n');
   }
 
@@ -304,7 +329,8 @@ export class GoodCitizenBot {
     const context = {
       observation,
       statusMessage: '',
-      systemPromptPath: this.config.systemPromptPath
+      systemPromptPath: this.config.systemPromptPath,
+      codeWriteEnabled: this.config.codeWriteEnabled
     };
     const transcript = [initialPrompt];
     const system = this.buildOllamaSystemPrompt();
@@ -363,8 +389,24 @@ export class GoodCitizenBot {
         });
       const prefixedMessage = ensureStatusPrefix(message, this.config.name);
       if (feedSaysLedgerResolved(observation.feed) && repeatsStaleLedgerConcern(prefixedMessage)) {
-        this.logger.warn('Ollama generated stale ledger-bug reporting after a resolution directive; using corrected status.');
-        return limitMessageLength(this.buildCorrectedStatusMessage(observation), this.config.maxMessageChars);
+        this.logger.warn('Ollama generated stale ledger-bug reporting after a resolution directive; requesting one revision.');
+        const revisedMessage = await generateOllamaMessage(
+          this.buildStaleLedgerRevisionPrompt(observation, prefixedMessage),
+          {
+            baseUrl: this.config.ollamaBaseUrl,
+            model: this.config.ollamaModel,
+            system: this.buildOllamaSystemPrompt(),
+            timeoutMs: this.config.ollamaTimeoutMs
+          }
+        );
+        const prefixedRevision = ensureStatusPrefix(revisedMessage, this.config.name);
+
+        if (repeatsStaleLedgerConcern(prefixedRevision)) {
+          this.logger.warn('Ollama revision still repeated stale ledger-bug reporting; skipping post for this tick.');
+          return NO_POST;
+        }
+
+        return limitMessageLength(prefixedRevision, this.config.maxMessageChars);
       }
 
       return limitMessageLength(prefixedMessage, this.config.maxMessageChars);
@@ -389,6 +431,11 @@ export class GoodCitizenBot {
     }
 
     const message = await this.buildStatusMessage(observation);
+    if (message === NO_POST) {
+      this.logger.info('Skipped posting: generated message failed stale-ledger validation.');
+      return observation;
+    }
+
     await postMessage(this.config.email, message, { name: this.config.name });
     this.lastPostAt = Date.now();
     this.logger.info(`Posted status message: ${message}`);

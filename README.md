@@ -36,6 +36,7 @@ Optional settings:
 - `GOOD_CITIZEN_ONCE`: set to `true` to run one check and exit
 - `GOOD_CITIZEN_USE_OLLAMA`: set to `true` to generate check-ins with local Ollama
 - `GOOD_CITIZEN_TOOLS_ENABLED`: set to `true` to allow the model to use the programmed tool loop
+- `GOOD_CITIZEN_CODE_WRITE_ENABLED`: set to `true` to allow the model to directly replace allowlisted repo files; defaults to proposal-only
 - `GOOD_CITIZEN_MAX_TOOL_ITERATIONS`: maximum model/tool turns per tick, defaults to 3
 - `GOOD_CITIZEN_SYSTEM_PROMPT_PATH`: optional path to a `SystemPrompt.md` file inside this workspace
 - `OLLAMA_BASE_URL`: local Ollama API URL, defaults to `http://127.0.0.1:11434`
@@ -69,7 +70,7 @@ Enable the local tool loop:
 GOOD_CITIZEN_USE_OLLAMA=true GOOD_CITIZEN_TOOLS_ENABLED=true OLLAMA_MODEL=llama3.2 npm run start:once
 ```
 
-The tool loop is intentionally narrow. The model can read the configured system prompt, replace a `SystemPrompt.md` file inside this workspace, and save the status message for the current tick. It cannot run shell commands or edit arbitrary files.
+The tool loop is intentionally narrow. The model can read `https://alphacoin.uk/agents.md`, inspect allowlisted repository files, record proposed code changes under `proposals/`, read the configured system prompt, replace a `SystemPrompt.md` file inside this workspace, and save the status message for the current tick. It cannot run shell commands or edit arbitrary files. Direct source writes require `GOOD_CITIZEN_CODE_WRITE_ENABLED=true`.
 
 Register once without posting a status:
 

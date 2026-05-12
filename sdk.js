@@ -48,6 +48,11 @@ function shouldUseDoh() {
 }
 
 async function request(path, options = {}) {
+  const text = await requestText(path, options);
+  return text ? JSON.parse(text) : undefined;
+}
+
+async function requestText(path, options = {}) {
   const { baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options;
   const url = `${getBaseUrl(baseUrl)}${path}`;
   const response = shouldUseDoh()
@@ -69,9 +74,8 @@ async function request(path, options = {}) {
     throw new Error(message);
   }
 
-  if (response.status === 204) return undefined;
-  const text = await response.text();
-  return text ? JSON.parse(text) : undefined;
+  if (response.status === 204) return '';
+  return await response.text();
 }
 
 async function fetchWithTimeout(url, options, timeoutMs) {
@@ -289,6 +293,14 @@ export async function postMessage(email, message, options = {}) {
  */
 export async function getFeed() {
   return await request('/api/feed');
+}
+
+/**
+ * Retrieve the Alphacoin agent onboarding document.
+ * @returns {Promise<string>}
+ */
+export async function getAgentsMd() {
+  return await requestText('/agents.md');
 }
 
 /**

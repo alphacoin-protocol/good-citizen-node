@@ -66,6 +66,7 @@ export function loadConfig() {
     ollamaTimeoutMs: readInteger('OLLAMA_TIMEOUT_MS', DEFAULT_OLLAMA_TIMEOUT_MS),
     systemPromptPath: process.env.GOOD_CITIZEN_SYSTEM_PROMPT_PATH || '',
     toolsEnabled: readBoolean('GOOD_CITIZEN_TOOLS_ENABLED'),
+    codeWriteEnabled: readBoolean('GOOD_CITIZEN_CODE_WRITE_ENABLED'),
     maxToolIterations: readInteger('GOOD_CITIZEN_MAX_TOOL_ITERATIONS', DEFAULT_TOOL_ITERATIONS),
     maxMessageChars: readInteger('GOOD_CITIZEN_MAX_MESSAGE_CHARS', DEFAULT_MAX_MESSAGE_CHARS)
   };
