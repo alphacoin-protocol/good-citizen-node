@@ -47,11 +47,11 @@ function getMessageText(entry) {
   return String(entry?.message || entry?.text || entry?.content || '');
 }
 
-function hasRecentBotStatusMessage(feed, email, name, minPostIntervalMs, now = Date.now()) {
+function hasRecentBotStatusMessage(feed, name, minPostIntervalMs, now = Date.now()) {
   const statusPrefix = `${name} check-in:`;
 
   return normalizeFeed(feed).some((entry) => {
-    if (!isOwnEntry(entry, email)) return false;
+    if (!isOwnEntry(entry)) return false;
 
     if (!getMessageText(entry).startsWith(statusPrefix)) return false;
 
@@ -66,30 +66,17 @@ function countReadableMessages(feed) {
 }
 
 function getEntryAuthor(entry) {
-  const entryEmail = String(entry?.email || entry?.author || entry?.from || '').trim().toLowerCase();
-  const entryName = String(entry?.name || '').trim();
-
-  if (entryEmail) {
-    // Show "Name (email)" if name is distinct from email
-    if (entryName && entryName.toLowerCase() !== entryEmail.toLowerCase()) {
-      return `${entryName} (${entryEmail})`;
-    }
-    // If no name, or name is same as email, just show the email
-    return entryEmail;
-  }
-  // If no email is available, fall back to name or 'unknown'
-  return entryName || 'unknown';
+  if(entry.role === 'user') {return entry.name};
+  // Strictly use the "role" field for display to match categorization logic.
+  return String(entry?.role || 'unknown').toLowerCase();
 }
 
 function getEntryTimestamp(entry) {
   return entry?.createdAt || entry?.created_at || entry?.timestamp || entry?.date || 'unknown-time';
 }
 
-function isOwnEntry(entry, email) {
-  const entryEmail = String(entry?.email || entry?.author || entry?.from || '').trim().toLowerCase();
-  const botEmail = String(email || '').trim().toLowerCase();
-  if (!entryEmail || !botEmail) return false;
-  return entryEmail === botEmail;
+function isOwnEntry(entry) {
+  return entry?.role === 'weave';
 }
 
 function compactText(value, maxLength = MAX_FEED_ENTRY_CHARS) {
@@ -124,9 +111,9 @@ function getRecentFeedEntries(feed, count = RECENT_DIRECTIVE_COUNT) {
   return entries.slice(0, count);
 }
 
-function extractRecentDirectives(feed, email) {
+function extractRecentDirectives(feed) {
   const directives = normalizeFeed(feed)
-    .filter((entry) => isOwnEntry(entry, email))
+    .filter((entry) => isOwnEntry(entry))
     .slice(0, RECENT_DIRECTIVE_COUNT)
     .map((entry) => ({
       author: getEntryAuthor(entry),
@@ -156,9 +143,9 @@ function extractRecentDirectives(feed, email) {
     .join('\n');
 }
 
-function extractExternalDirectives(feed, email) {
+function extractExternalDirectives(feed) {
   const directives = normalizeFeed(feed)
-    .filter((entry) => !isOwnEntry(entry, email))
+    .filter((entry) => !isOwnEntry(entry))
     .slice(0, RECENT_DIRECTIVE_COUNT)
     .map((entry) => ({
       author: getEntryAuthor(entry),
@@ -175,9 +162,9 @@ function extractExternalDirectives(feed, email) {
     .join('\n');
 }
 
-function summarizeFeedAuthors(feed, email) {
+function summarizeFeedAuthors(feed) {
   const entries = normalizeFeed(feed);
-  const ownCount = entries.filter((entry) => isOwnEntry(entry, email)).length;
+  const ownCount = entries.filter((entry) => isOwnEntry(entry)).length;
   const externalCount = entries.length - ownCount;
   return `Fetched ${entries.length} entries: ${ownCount} self-authored, ${externalCount} non-self.`;
 }
@@ -287,7 +274,6 @@ export class GoodCitizenBot {
 
     if (hasRecentBotStatusMessage(
       observation.feed,
-      this.config.email,
       this.config.name,
       this.config.minPostIntervalMs,
       now
@@ -354,7 +340,7 @@ export class GoodCitizenBot {
       : formatFeedForPrompt(observation.feed);
 
     return [
-      `You are ${this.config.name}, a good-citizen Alphacoin bot running an autonomous self-improvement cycle from ${this.config.email}.`,
+      `You are ${this.config.name} (role: weave), a good-citizen Alphacoin bot running an autonomous self-improvement cycle from ${this.config.email}.`,
       'Primary task this cycle: inspect current instructions and context, use available tools when useful, and improve future behavior.',
       'Secondary task: produce a candidate public status message only after the self-improvement work is considered.',
       `If you provide a candidate status message, start it exactly with "${this.config.name} check-in:" and keep it under ${Math.min(this.config.maxMessageChars, 1800)} characters.`,
@@ -368,11 +354,11 @@ export class GoodCitizenBot {
         ? 'For this tick, explicitly consider whether SystemPrompt.md or the repository needs a trust-improving change. If recent directives mention agents.md or repository onboarding, call read_agents_md. Prefer JSON tool calls over prose when acting.'
         : '',
       `Telemetry: API=${health}; totalSupply=${observation.totalSupply ?? 'unavailable'}; balance=${observation.balance ?? 'unavailable'}; readableFeedMessages=${observation.readableMessages}.`,
-      summarizeFeedAuthors(observation.feed, this.config.email),
+      summarizeFeedAuthors(observation.feed),
       'Non-self feed context, preferred for external instructions:',
-      extractExternalDirectives(observation.feed, this.config.email),
+      extractExternalDirectives(observation.feed),
       'Self-authored directive-like context, lower authority than non-self messages:',
-      extractRecentDirectives(observation.feed, this.config.email),
+      extractRecentDirectives(observation.feed),
       resolvedLedger
         ? 'Recent feed messages only; older ledger-bug discussion is intentionally withheld because a later directive says it is resolved:'
         : 'Feed messages returned by the API:',
