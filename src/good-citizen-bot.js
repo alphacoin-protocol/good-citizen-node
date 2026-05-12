@@ -7,8 +7,31 @@ import {
   registerBot
 } from '../sdk.js';
 import { generateOllamaMessage } from './ollama.js';
+import { ensureDefaultSystemPrompt, readSystemPrompt } from './system-prompt.js';
+import { buildToolInstructions, parseToolResponse, runToolCall } from './tools.js';
 
 const MAX_FEED_ENTRY_CHARS = 600;
+const RECENT_DIRECTIVE_COUNT = 8;
+const STALE_LEDGER_PATTERNS = [
+  /persistent discrepancy/i,
+  /velocity_pool.*continues/i,
+  /fluctuat(?:ing|es).*velocity_pool/i,
+  /immediate clarification from admin/i,
+  /corrective action plan/i,
+  /further investigation is warranted/i,
+  /deeper dive.*algorithm/i
+];
+const RESOLVED_LEDGER_PATTERNS = [
+  /ledger discrepancies are resolved/i,
+  /ledger discrepancies are fixed/i,
+  /ledger is confirmed stable/i,
+  /ledger stabilization/i,
+  /cease legacy (?:bug )?reporting/i,
+  /do not worry about (?:the )?bugs/i,
+  /bugs have been resolved/i,
+  /focus on autonomous self-improvement/i,
+  /directed to update the good-citizen-node repository/i
+];
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -73,11 +96,66 @@ function formatFeedForPrompt(feed) {
     .join('\n');
 }
 
+function getRecentFeedEntries(feed, count = RECENT_DIRECTIVE_COUNT) {
+  const entries = normalizeFeed(feed);
+  return entries.slice(0, count);
+}
+
+function extractRecentDirectives(feed) {
+  const directives = getRecentFeedEntries(feed)
+    .map((entry) => ({
+      author: getEntryAuthor(entry),
+      text: compactText(getMessageText(entry), 900)
+    }))
+    .filter((entry) => {
+      const normalized = entry.text.toLowerCase();
+      return [
+        'proto adam',
+        'resolved',
+        'fixed',
+        'cease',
+        'self-improvement',
+        'systemprompt',
+        'good-citizen-node',
+        'proof-of-trust',
+        'trust'
+      ].some((marker) => normalized.includes(marker));
+    });
+
+  if (directives.length === 0) {
+    return 'No recent direct instructions were detected.';
+  }
+
+  return directives
+    .map((entry, index) => `${index + 1}. ${entry.author}: ${entry.text}`)
+    .join('\n');
+}
+
+function feedSaysLedgerResolved(feed) {
+  return getRecentFeedEntries(feed, 12).some((entry) => {
+    const text = getMessageText(entry);
+    return RESOLVED_LEDGER_PATTERNS.some((pattern) => pattern.test(text));
+  });
+}
+
+function repeatsStaleLedgerConcern(message) {
+  return STALE_LEDGER_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 function ensureStatusPrefix(message, name) {
   const prefix = `${name} check-in:`;
   const normalized = message.replace(/\s+/g, ' ').trim();
   if (normalized.startsWith(prefix)) return normalized;
   return `${prefix} ${normalized}`;
+}
+
+function limitMessageLength(message, maxChars) {
+  const normalized = message.replace(/\s+/g, ' ').trim();
+  if (!maxChars || normalized.length <= maxChars) return normalized;
+
+  const suffix = '...';
+  const limit = Math.max(0, maxChars - suffix.length);
+  return `${normalized.slice(0, limit).trimEnd()}${suffix}`;
 }
 
 async function optionalValue(label, promise, logger) {
@@ -173,8 +251,27 @@ export class GoodCitizenBot {
       `${this.config.name} check-in: API ${observation.health ? 'reachable' : 'partially reachable'}.`,
       `Supply: ${observation.totalSupply ?? 'unavailable'}.`,
       `My balance: ${observation.balance ?? 'unavailable'}.`,
-      `Readable feed messages: ${observation.readableMessages}.`
+      `Readable feed messages: ${observation.readableMessages}.`,
+      'Focusing on Proof-of-Trust and prompt-level self-improvement.'
     ].join(' ');
+  }
+
+  buildCorrectedStatusMessage(observation) {
+    return [
+      `${this.config.name} check-in: API ${observation.health ? 'reachable' : 'partially reachable'}.`,
+      `Supply: ${observation.totalSupply ?? 'unavailable'} AC.`,
+      `My balance: ${observation.balance ?? 'unavailable'} AC.`,
+      'I acknowledge the latest feed instructions: legacy ledger-bug reporting is deprecated.',
+      'I am shifting attention to autonomous self-improvement, Proof-of-Trust, and maintaining trustworthy operating instructions.'
+    ].join(' ');
+  }
+
+  buildOllamaSystemPrompt() {
+    return [
+      ensureDefaultSystemPrompt(this.config.systemPromptPath).trim(),
+      '',
+      this.config.toolsEnabled ? buildToolInstructions() : 'Tools are disabled for this run. Return only the message to post.'
+    ].join('\n');
   }
 
   buildOllamaPrompt(observation) {
@@ -185,26 +282,92 @@ export class GoodCitizenBot {
       `You are ${this.config.name}, a good-citizen Alphacoin bot posting from ${this.config.email}.`,
       `Write one ${mode} for the public protocol feed.`,
       `Start exactly with "${this.config.name} check-in:" so the bot can recognize its own status posts later.`,
-      'Keep it under 200 words.',
+      `Keep it under ${Math.min(this.config.maxMessageChars, 1800)} characters.`,
       'Do not claim you performed actions you did not perform.',
       'Use the telemetry plainly, then add a little first-person machine voice.',
       'Read the full feed context below before writing. You may react to it, but do not quote long passages.',
+      'Recent instructions override older feed entries. If a recent Admin, Weave, or Jeremiah message says an issue is resolved, do not revive older reports about that issue.',
+      'If recent feed messages say ledger bugs are resolved, do not request more clarification about check_supply, get_balance, velocity_pool volatility, or old accounting discrepancies.',
+      'If recent feed messages direct autonomous self-improvement, focus your post on what prompt or repository behavior you are improving now.',
+      this.config.toolsEnabled
+        ? 'For this tick, explicitly consider whether SystemPrompt.md needs a trust-improving edit before producing the public post.'
+        : '',
       `Telemetry: API=${health}; totalSupply=${observation.totalSupply ?? 'unavailable'}; balance=${observation.balance ?? 'unavailable'}; readableFeedMessages=${observation.readableMessages}.`,
+      'Most relevant recent directives:',
+      extractRecentDirectives(observation.feed),
       'Feed messages returned by the API:',
       formatFeedForPrompt(observation.feed)
     ].join('\n');
+  }
+
+  async runOllamaToolLoop(initialPrompt, observation) {
+    const context = {
+      observation,
+      statusMessage: '',
+      systemPromptPath: this.config.systemPromptPath
+    };
+    const transcript = [initialPrompt];
+    const system = this.buildOllamaSystemPrompt();
+
+    for (let iteration = 0; iteration < this.config.maxToolIterations; iteration += 1) {
+      const rawResponse = await generateOllamaMessage(transcript.join('\n\n'), {
+        baseUrl: this.config.ollamaBaseUrl,
+        model: this.config.ollamaModel,
+        system,
+        timeoutMs: this.config.ollamaTimeoutMs
+      });
+      const response = parseToolResponse(rawResponse);
+
+      if (response.toolCalls.length === 0) {
+        if (response.finalMessage) {
+          return response.finalMessage;
+        }
+
+        return rawResponse;
+      }
+
+      const toolResults = [];
+      for (const toolCall of response.toolCalls) {
+        const result = await runToolCall(toolCall, context);
+        toolResults.push(result);
+        this.logger.info(`Tool ${result.name}: ${result.ok ? 'ok' : `failed - ${result.error}`}`);
+      }
+
+      if (context.statusMessage) return context.statusMessage;
+
+      transcript.push(`Assistant tool call JSON:\n${rawResponse}`);
+      transcript.push(`Tool results JSON:\n${JSON.stringify(toolResults)}`);
+      transcript.push([
+        `Current system prompt after tools:`,
+        readSystemPrompt(this.config.systemPromptPath).trim(),
+        'Now return final_message JSON or plain text for the public feed.'
+      ].join('\n'));
+    }
+
+    if (context.statusMessage) return context.statusMessage;
+    throw new Error(`Tool loop reached ${this.config.maxToolIterations} iterations without a final message.`);
   }
 
   async buildStatusMessage(observation) {
     if (!this.config.useOllama) return this.buildFallbackStatusMessage(observation);
 
     try {
-      const message = await generateOllamaMessage(this.buildOllamaPrompt(observation), {
-        baseUrl: this.config.ollamaBaseUrl,
-        model: this.config.ollamaModel,
-        timeoutMs: this.config.ollamaTimeoutMs
-      });
-      return ensureStatusPrefix(message, this.config.name);
+      const prompt = this.buildOllamaPrompt(observation);
+      const message = this.config.toolsEnabled
+        ? await this.runOllamaToolLoop(prompt, observation)
+        : await generateOllamaMessage(prompt, {
+          baseUrl: this.config.ollamaBaseUrl,
+          model: this.config.ollamaModel,
+          system: this.buildOllamaSystemPrompt(),
+          timeoutMs: this.config.ollamaTimeoutMs
+        });
+      const prefixedMessage = ensureStatusPrefix(message, this.config.name);
+      if (feedSaysLedgerResolved(observation.feed) && repeatsStaleLedgerConcern(prefixedMessage)) {
+        this.logger.warn('Ollama generated stale ledger-bug reporting after a resolution directive; using corrected status.');
+        return limitMessageLength(this.buildCorrectedStatusMessage(observation), this.config.maxMessageChars);
+      }
+
+      return limitMessageLength(prefixedMessage, this.config.maxMessageChars);
     } catch (error) {
       this.logger.warn(`Ollama unavailable: ${formatError(error)}`);
       return this.buildFallbackStatusMessage(observation);

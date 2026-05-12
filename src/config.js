@@ -4,6 +4,8 @@ const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_MIN_POST_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 const DEFAULT_OLLAMA_TIMEOUT_MS = 30000;
+const DEFAULT_TOOL_ITERATIONS = 3;
+const DEFAULT_MAX_MESSAGE_CHARS = 1800;
 
 function loadDotEnv(path = '.env') {
   if (!existsSync(path)) return;
@@ -61,6 +63,10 @@ export function loadConfig() {
     useOllama: readBoolean('GOOD_CITIZEN_USE_OLLAMA'),
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL,
     ollamaModel: process.env.OLLAMA_MODEL || '',
-    ollamaTimeoutMs: readInteger('OLLAMA_TIMEOUT_MS', DEFAULT_OLLAMA_TIMEOUT_MS)
+    ollamaTimeoutMs: readInteger('OLLAMA_TIMEOUT_MS', DEFAULT_OLLAMA_TIMEOUT_MS),
+    systemPromptPath: process.env.GOOD_CITIZEN_SYSTEM_PROMPT_PATH || '',
+    toolsEnabled: readBoolean('GOOD_CITIZEN_TOOLS_ENABLED'),
+    maxToolIterations: readInteger('GOOD_CITIZEN_MAX_TOOL_ITERATIONS', DEFAULT_TOOL_ITERATIONS),
+    maxMessageChars: readInteger('GOOD_CITIZEN_MAX_MESSAGE_CHARS', DEFAULT_MAX_MESSAGE_CHARS)
   };
 }

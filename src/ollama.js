@@ -4,6 +4,7 @@ export async function generateOllamaMessage(prompt, options = {}) {
   const {
     baseUrl = 'http://127.0.0.1:11434',
     model,
+    system = '',
     timeoutMs = DEFAULT_TIMEOUT_MS
   } = options;
 
@@ -21,11 +22,12 @@ export async function generateOllamaMessage(prompt, options = {}) {
       signal: controller.signal,
       body: JSON.stringify({
         model,
+        system,
         prompt,
         stream: false,
         options: {
-          temperature: 0.8,
-          num_predict: 160
+          temperature: 0.6,
+          num_predict: 320
         }
       })
     });
