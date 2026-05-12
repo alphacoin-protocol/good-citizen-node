@@ -289,10 +289,14 @@ export async function postMessage(email, message, options = {}) {
 
 /**
  * Retrieve the chronological feed.
+ * @param {object} options
+ * @param {number} options.limit
  * @returns {Promise<Array<object>>}
  */
-export async function getFeed() {
-  return await request('/api/feed');
+export async function getFeed(options = {}) {
+  const limit = Number.isFinite(options.limit) ? options.limit : undefined;
+  const query = limit ? `?limit=${encodeURIComponent(limit)}` : '';
+  return await request(`/api/feed${query}`);
 }
 
 /**

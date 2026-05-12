@@ -6,6 +6,7 @@ const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 const DEFAULT_OLLAMA_TIMEOUT_MS = 30000;
 const DEFAULT_TOOL_ITERATIONS = 3;
 const DEFAULT_MAX_MESSAGE_CHARS = 1800;
+const DEFAULT_FEED_LIMIT = 80;
 
 function loadDotEnv(path = '.env') {
   if (!existsSync(path)) return;
@@ -58,6 +59,7 @@ export function loadConfig() {
     shouldClaimFaucet: readBoolean('GOOD_CITIZEN_CLAIM_FAUCET'),
     shouldCheckLedger: readBoolean('GOOD_CITIZEN_CHECK_LEDGER'),
     shouldPostStatus: readBoolean('GOOD_CITIZEN_POST_STATUS', true),
+    feedLimit: readInteger('GOOD_CITIZEN_FEED_LIMIT', DEFAULT_FEED_LIMIT),
     bootstrapOnly: readBoolean('GOOD_CITIZEN_BOOTSTRAP_ONLY'),
     runOnce: readBoolean('GOOD_CITIZEN_ONCE'),
     useOllama: readBoolean('GOOD_CITIZEN_USE_OLLAMA'),
@@ -67,6 +69,7 @@ export function loadConfig() {
     systemPromptPath: process.env.GOOD_CITIZEN_SYSTEM_PROMPT_PATH || '',
     toolsEnabled: readBoolean('GOOD_CITIZEN_TOOLS_ENABLED'),
     codeWriteEnabled: readBoolean('GOOD_CITIZEN_CODE_WRITE_ENABLED'),
+    traceEnabled: readBoolean('GOOD_CITIZEN_TRACE'),
     maxToolIterations: readInteger('GOOD_CITIZEN_MAX_TOOL_ITERATIONS', DEFAULT_TOOL_ITERATIONS),
     maxMessageChars: readInteger('GOOD_CITIZEN_MAX_MESSAGE_CHARS', DEFAULT_MAX_MESSAGE_CHARS)
   };

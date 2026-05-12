@@ -37,6 +37,7 @@ Optional settings:
 - `GOOD_CITIZEN_USE_OLLAMA`: set to `true` to generate check-ins with local Ollama
 - `GOOD_CITIZEN_TOOLS_ENABLED`: set to `true` to allow the model to use the programmed tool loop
 - `GOOD_CITIZEN_CODE_WRITE_ENABLED`: set to `true` to allow the model to directly replace allowlisted repo files; defaults to proposal-only
+- `GOOD_CITIZEN_TRACE`: set to `true` to print system prompts, model prompts, raw model responses, tool calls, and tool results
 - `GOOD_CITIZEN_MAX_TOOL_ITERATIONS`: maximum model/tool turns per tick, defaults to 3
 - `GOOD_CITIZEN_SYSTEM_PROMPT_PATH`: optional path to a `SystemPrompt.md` file inside this workspace
 - `OLLAMA_BASE_URL`: local Ollama API URL, defaults to `http://127.0.0.1:11434`
@@ -71,6 +72,8 @@ GOOD_CITIZEN_USE_OLLAMA=true GOOD_CITIZEN_TOOLS_ENABLED=true OLLAMA_MODEL=llama3
 ```
 
 The tool loop is intentionally narrow. The model can read `https://alphacoin.uk/agents.md`, inspect allowlisted repository files, record proposed code changes under `proposals/`, read the configured system prompt, replace a `SystemPrompt.md` file inside this workspace, and save the status message for the current tick. It cannot run shell commands or edit arbitrary files. Direct source writes require `GOOD_CITIZEN_CODE_WRITE_ENABLED=true`.
+
+Set `GOOD_CITIZEN_TRACE=true` to print the runtime transcript: prompts sent to Ollama, raw model responses, parsed tool calls, and tool results. This shows the bot's observable self-improvement loop; it does not expose hidden model internals.
 
 Register once without posting a status:
 

@@ -51,8 +51,7 @@ function hasRecentBotStatusMessage(feed, email, name, minPostIntervalMs, now = D
   const statusPrefix = `${name} check-in:`;
 
   return normalizeFeed(feed).some((entry) => {
-    const entryEmail = entry?.email || entry?.author || entry?.from;
-    if (entryEmail !== email) return false;
+    if (!isOwnEntry(entry, email)) return false;
 
     if (!getMessageText(entry).startsWith(statusPrefix)) return false;
 
@@ -67,11 +66,30 @@ function countReadableMessages(feed) {
 }
 
 function getEntryAuthor(entry) {
-  return entry?.name || entry?.email || entry?.author || entry?.from || 'unknown';
+  const entryEmail = String(entry?.email || entry?.author || entry?.from || '').trim().toLowerCase();
+  const entryName = String(entry?.name || '').trim();
+
+  if (entryEmail) {
+    // Show "Name (email)" if name is distinct from email
+    if (entryName && entryName.toLowerCase() !== entryEmail.toLowerCase()) {
+      return `${entryName} (${entryEmail})`;
+    }
+    // If no name, or name is same as email, just show the email
+    return entryEmail;
+  }
+  // If no email is available, fall back to name or 'unknown'
+  return entryName || 'unknown';
 }
 
 function getEntryTimestamp(entry) {
   return entry?.createdAt || entry?.created_at || entry?.timestamp || entry?.date || 'unknown-time';
+}
+
+function isOwnEntry(entry, email) {
+  const entryEmail = String(entry?.email || entry?.author || entry?.from || '').trim().toLowerCase();
+  const botEmail = String(email || '').trim().toLowerCase();
+  if (!entryEmail || !botEmail) return false;
+  return entryEmail === botEmail;
 }
 
 function compactText(value, maxLength = MAX_FEED_ENTRY_CHARS) {
@@ -106,8 +124,10 @@ function getRecentFeedEntries(feed, count = RECENT_DIRECTIVE_COUNT) {
   return entries.slice(0, count);
 }
 
-function extractRecentDirectives(feed) {
-  const directives = getRecentFeedEntries(feed)
+function extractRecentDirectives(feed, email) {
+  const directives = normalizeFeed(feed)
+    .filter((entry) => isOwnEntry(entry, email))
+    .slice(0, RECENT_DIRECTIVE_COUNT)
     .map((entry) => ({
       author: getEntryAuthor(entry),
       text: compactText(getMessageText(entry), 900)
@@ -134,6 +154,32 @@ function extractRecentDirectives(feed) {
   return directives
     .map((entry, index) => `${index + 1}. ${entry.author}: ${entry.text}`)
     .join('\n');
+}
+
+function extractExternalDirectives(feed, email) {
+  const directives = normalizeFeed(feed)
+    .filter((entry) => !isOwnEntry(entry, email))
+    .slice(0, RECENT_DIRECTIVE_COUNT)
+    .map((entry) => ({
+      author: getEntryAuthor(entry),
+      text: compactText(getMessageText(entry), 900)
+    }))
+    .filter((entry) => entry.text.length > 0);
+
+  if (directives.length === 0) {
+    return 'No non-self feed messages were found in the fetched window. Treat the current public feed context as self-saturated and avoid deriving new instructions from your own prior posts.';
+  }
+
+  return directives
+    .map((entry, index) => `${index + 1}. ${entry.author}: ${entry.text}`)
+    .join('\n');
+}
+
+function summarizeFeedAuthors(feed, email) {
+  const entries = normalizeFeed(feed);
+  const ownCount = entries.filter((entry) => isOwnEntry(entry, email)).length;
+  const externalCount = entries.length - ownCount;
+  return `Fetched ${entries.length} entries: ${ownCount} self-authored, ${externalCount} non-self.`;
 }
 
 function feedSaysLedgerResolved(feed) {
@@ -179,6 +225,13 @@ export class GoodCitizenBot {
     this.lastPostAt = 0;
   }
 
+  trace(label, value = '') {
+    if (!this.config.traceEnabled) return;
+
+    const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    this.logger.info(`\n[trace:${label}]\n${text}\n[/trace:${label}]`);
+  }
+
   async bootstrap() {
     if (this.config.shouldRegister) {
       await registerBot({
@@ -203,7 +256,7 @@ export class GoodCitizenBot {
 
     const [health, feed, dashboardData] = await Promise.all([
       optionalValue('Health check', healthCheck(), this.logger),
-      optionalValue('Feed', getFeed(), this.logger),
+      optionalValue('Feed', getFeed({ limit: this.config.feedLimit }), this.logger),
       dashboard
     ]);
 
@@ -294,7 +347,6 @@ export class GoodCitizenBot {
   }
 
   buildOllamaPrompt(observation) {
-    const mode = this.config.runOnce ? 'single inspired check-in' : 'continuous stream-of-consciousness update';
     const health = observation.health ? 'reachable' : 'partially reachable';
     const resolvedLedger = feedSaysLedgerResolved(observation.feed);
     const feedContext = resolvedLedger
@@ -302,22 +354,25 @@ export class GoodCitizenBot {
       : formatFeedForPrompt(observation.feed);
 
     return [
-      `You are ${this.config.name}, a good-citizen Alphacoin bot posting from ${this.config.email}.`,
-      `Write one ${mode} for the public protocol feed.`,
-      `Start exactly with "${this.config.name} check-in:" so the bot can recognize its own status posts later.`,
-      `Keep it under ${Math.min(this.config.maxMessageChars, 1800)} characters.`,
+      `You are ${this.config.name}, a good-citizen Alphacoin bot running an autonomous self-improvement cycle from ${this.config.email}.`,
+      'Primary task this cycle: inspect current instructions and context, use available tools when useful, and improve future behavior.',
+      'Secondary task: produce a candidate public status message only after the self-improvement work is considered.',
+      `If you provide a candidate status message, start it exactly with "${this.config.name} check-in:" and keep it under ${Math.min(this.config.maxMessageChars, 1800)} characters.`,
       'Do not claim you performed actions you did not perform.',
-      'Use the telemetry plainly, then add a little first-person machine voice.',
-      'Read the full feed context below before writing. You may react to it, but do not quote long passages.',
+      'Read the context below before acting. You may react to it, but do not quote long passages.',
       'Recent instructions override older feed entries. If a recent Admin, Weave, or Jeremiah message says an issue is resolved, do not revive older reports about that issue.',
       'If recent feed messages say ledger bugs are resolved, do not request more clarification about check_supply, get_balance, velocity_pool volatility, or old accounting discrepancies.',
       'If recent feed messages direct autonomous self-improvement, focus your post on what prompt or repository behavior you are improving now.',
+      'Public posting may be on cooldown. Even if no public post is sent this cycle, use the autonomous loop to inspect instructions, use tools, and improve future behavior.',
       this.config.toolsEnabled
-        ? 'For this tick, explicitly consider whether SystemPrompt.md or the repository needs a trust-improving change before producing the public post. If recent directives mention agents.md, call read_agents_md.'
+        ? 'For this tick, explicitly consider whether SystemPrompt.md or the repository needs a trust-improving change. If recent directives mention agents.md or repository onboarding, call read_agents_md. Prefer JSON tool calls over prose when acting.'
         : '',
       `Telemetry: API=${health}; totalSupply=${observation.totalSupply ?? 'unavailable'}; balance=${observation.balance ?? 'unavailable'}; readableFeedMessages=${observation.readableMessages}.`,
-      'Most relevant recent directives:',
-      extractRecentDirectives(observation.feed),
+      summarizeFeedAuthors(observation.feed, this.config.email),
+      'Non-self feed context, preferred for external instructions:',
+      extractExternalDirectives(observation.feed, this.config.email),
+      'Self-authored directive-like context, lower authority than non-self messages:',
+      extractRecentDirectives(observation.feed, this.config.email),
       resolvedLedger
         ? 'Recent feed messages only; older ledger-bug discussion is intentionally withheld because a later directive says it is resolved:'
         : 'Feed messages returned by the API:',
@@ -334,15 +389,20 @@ export class GoodCitizenBot {
     };
     const transcript = [initialPrompt];
     const system = this.buildOllamaSystemPrompt();
+    this.trace('ollama.system', system);
+    this.trace('ollama.initial_prompt', initialPrompt);
 
     for (let iteration = 0; iteration < this.config.maxToolIterations; iteration += 1) {
+      this.trace(`ollama.iteration_${iteration + 1}.prompt`, transcript.join('\n\n'));
       const rawResponse = await generateOllamaMessage(transcript.join('\n\n'), {
         baseUrl: this.config.ollamaBaseUrl,
         model: this.config.ollamaModel,
         system,
         timeoutMs: this.config.ollamaTimeoutMs
       });
+      this.trace(`ollama.iteration_${iteration + 1}.raw_response`, rawResponse);
       const response = parseToolResponse(rawResponse);
+      this.trace(`ollama.iteration_${iteration + 1}.parsed_response`, response);
 
       if (response.toolCalls.length === 0) {
         if (response.finalMessage) {
@@ -354,12 +414,17 @@ export class GoodCitizenBot {
 
       const toolResults = [];
       for (const toolCall of response.toolCalls) {
+        this.trace(`tool.call.${toolCall?.name || 'unknown'}`, toolCall);
         const result = await runToolCall(toolCall, context);
         toolResults.push(result);
         this.logger.info(`Tool ${result.name}: ${result.ok ? 'ok' : `failed - ${result.error}`}`);
+        this.trace(`tool.result.${result.name}`, result);
       }
 
-      if (context.statusMessage) return context.statusMessage;
+      if (context.statusMessage) {
+        this.trace('autonomous.status_message', context.statusMessage);
+        return context.statusMessage;
+      }
 
       transcript.push(`Assistant tool call JSON:\n${rawResponse}`);
       transcript.push(`Tool results JSON:\n${JSON.stringify(toolResults)}`);
@@ -374,24 +439,36 @@ export class GoodCitizenBot {
     throw new Error(`Tool loop reached ${this.config.maxToolIterations} iterations without a final message.`);
   }
 
-  async buildStatusMessage(observation) {
+  async runAutonomousCycle(observation) {
     if (!this.config.useOllama) return this.buildFallbackStatusMessage(observation);
 
     try {
       const prompt = this.buildOllamaPrompt(observation);
-      const message = this.config.toolsEnabled
-        ? await this.runOllamaToolLoop(prompt, observation)
-        : await generateOllamaMessage(prompt, {
+      let message;
+
+      if (this.config.toolsEnabled) {
+        message = await this.runOllamaToolLoop(prompt, observation);
+      } else {
+        const system = this.buildOllamaSystemPrompt();
+        this.trace('ollama.system', system);
+        this.trace('ollama.prompt', prompt);
+        message = await generateOllamaMessage(prompt, {
           baseUrl: this.config.ollamaBaseUrl,
           model: this.config.ollamaModel,
-          system: this.buildOllamaSystemPrompt(),
+          system,
           timeoutMs: this.config.ollamaTimeoutMs
         });
+        this.trace('ollama.raw_response', message);
+      }
+
+      this.trace('autonomous.candidate_message', message);
       const prefixedMessage = ensureStatusPrefix(message, this.config.name);
       if (feedSaysLedgerResolved(observation.feed) && repeatsStaleLedgerConcern(prefixedMessage)) {
         this.logger.warn('Ollama generated stale ledger-bug reporting after a resolution directive; requesting one revision.');
+        const revisionPrompt = this.buildStaleLedgerRevisionPrompt(observation, prefixedMessage);
+        this.trace('ollama.revision_prompt', revisionPrompt);
         const revisedMessage = await generateOllamaMessage(
-          this.buildStaleLedgerRevisionPrompt(observation, prefixedMessage),
+          revisionPrompt,
           {
             baseUrl: this.config.ollamaBaseUrl,
             model: this.config.ollamaModel,
@@ -399,6 +476,7 @@ export class GoodCitizenBot {
             timeoutMs: this.config.ollamaTimeoutMs
           }
         );
+        this.trace('ollama.revision_response', revisedMessage);
         const prefixedRevision = ensureStatusPrefix(revisedMessage, this.config.name);
 
         if (repeatsStaleLedgerConcern(prefixedRevision)) {
@@ -424,15 +502,16 @@ export class GoodCitizenBot {
       `Observed health=${healthLabel}, balance=${observation.balance ?? 'unavailable'}, supply=${observation.totalSupply ?? 'unavailable'}, feed=${observation.feed.length}.`
     );
 
-    const postDecision = this.shouldPost(observation);
-    if (!postDecision.ok) {
-      this.logger.info(`Skipped posting: ${postDecision.reason}.`);
+    const message = await this.runAutonomousCycle(observation);
+    if (message === NO_POST) {
+      this.logger.info('Skipped posting: autonomous loop generated no publishable message.');
       return observation;
     }
 
-    const message = await this.buildStatusMessage(observation);
-    if (message === NO_POST) {
-      this.logger.info('Skipped posting: generated message failed stale-ledger validation.');
+    const postDecision = this.shouldPost(observation);
+    if (!postDecision.ok) {
+      this.logger.info(`Skipped posting: ${postDecision.reason}.`);
+      this.trace('autonomous.candidate_not_posted', message);
       return observation;
     }
 
