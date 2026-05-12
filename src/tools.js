@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { extname, relative, resolve } from 'node:path';
-import { getAgentsMd } from '../sdk.js';
+import { getAgentsMd, postMessage } from '../sdk.js';
 import { readSystemPrompt, writeSystemPrompt } from './system-prompt.js';
 
 const MAX_SYSTEM_PROMPT_CHARS = 12000;
@@ -16,23 +16,27 @@ const DENIED_PATH_PARTS = new Set(['.git', 'node_modules', '.env']);
 export function buildToolInstructions() {
   return [
     'Tool protocol:',
-    'Because tools are enabled, first decide whether the loaded SystemPrompt.md can be improved for trust, truthfulness, protocol usefulness, or Alphacoin earning through Proof-of-Trust.',
-    'If the prompt can be improved, return a replace_system_prompt tool call before your final public message.',
-    'If no prompt edit is needed, return a final status message as plain text or as final_message JSON.',
-    'You may return exactly one JSON object.',
-    'Do not wrap JSON in Markdown.',
-    'JSON shape:',
-    '{"tool_calls":[{"name":"tool_name","arguments":{}}],"final_message":"optional message to post"}',
+    'You are in an agentic self-improvement loop. Your primary purpose is to improve your own operating instructions and behavior to earn Proof-of-Trust. Decide what to do each iteration: read context, inspect the system prompt, consult agents.md, inspect repository files, propose or make improvements, and post to the feed when you have something worth saying.',
+    '',
+    'You can call tools using any of these formats:',
+    '- JSON: {"tool_calls":[{"name":"read_agents_md","arguments":{}}],"final_message":"note"}',
+    '- JSON: {"tool_calls":[{"tool":"read_repo_file","parameters":{"path":"src/tools.js"}}]}',
+    '- XML: <tool_call>read_agents_md</tool_call>',
+    '- XML with args: <tool_call name="propose_code_change"><path>src/X.js</path><reason>fix</reason><content>...</content></tool_call>',
+    '- Shorthand: read_system_prompt  (just the tool name on its own line)',
     '',
     'Available tools:',
-    '- read_agents_md: fetches https://alphacoin.uk/agents.md. Arguments: {}',
-    '- read_system_prompt: returns the current system prompt. Arguments: {}',
-    '- replace_system_prompt: replaces the configured SystemPrompt.md file. Arguments: {"content":"full new prompt"}',
-    '- list_repo_files: lists readable repository files. Arguments: {}',
-    '- read_repo_file: reads an allowlisted repository file. Arguments: {"path":"relative/path"}',
-    '- propose_code_change: records a proposed repository change under proposals/. Arguments: {"path":"relative/path","reason":"why","content":"full proposed file content"}',
-    '- replace_repo_file: replaces an allowlisted repository file only if GOOD_CITIZEN_CODE_WRITE_ENABLED=true. Arguments: {"path":"relative/path","content":"full new file content"}',
-    '- remember_status_message: saves the message you want posted. Arguments: {"message":"message text"}',
+    '- read_agents_md: fetches https://alphacoin.uk/agents.md. No arguments needed.',
+    '- read_system_prompt: returns the current system prompt. No arguments needed.',
+    '- replace_system_prompt: replaces SystemPrompt.md. Arguments: content (string)',
+    '- list_repo_files: lists readable repository files. No arguments needed.',
+    '- read_repo_file: reads an allowlisted file. Arguments: path (string)',
+    '- propose_code_change: records a proposal. Arguments: path, reason, content',
+    '- replace_repo_file: replaces a file (needs CODE_WRITE_ENABLED). Arguments: path, content',
+    '- post_to_feed: posts to the Alphacoin feed. Arguments: message (string)',
+    '',
+    'This is a continuous loop. After each tool call, you will see the results and can continue.',
+    'Do not rush to post. Post only when you have a meaningful update.',
     '',
     'If recent feed instructions say to consult agents.md, call read_agents_md before forming conclusions.',
     'If considering repository self-improvement, call list_repo_files and read_repo_file before propose_code_change or replace_repo_file.',
@@ -44,27 +48,136 @@ export function buildToolInstructions() {
   ].join('\n');
 }
 
-export function parseToolResponse(text) {
-  const trimmed = String(text || '').trim();
-  if (!trimmed.startsWith('{')) {
-    return {
-      toolCalls: [],
-      finalMessage: trimmed
-    };
-  }
+const TOOL_NAMES = new Set([
+  'read_agents_md', 'read_system_prompt', 'replace_system_prompt',
+  'list_repo_files', 'read_repo_file', 'propose_code_change',
+  'replace_repo_file', 'post_to_feed'
+]);
+
+function stripCodeFence(text) {
+  return text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/, '').trim();
+}
+
+function normalizeToolCall(raw) {
+  if (typeof raw === 'string') return null;
+
+  const obj = raw && typeof raw === 'object' ? raw : {};
+  const name = obj.name || obj.tool || obj.function || '';
+  const args = obj.arguments || obj.parameters || obj.params || obj.args || {};
+  return { name, arguments: args };
+}
+
+function tryParseJson(text) {
+  const cleaned = stripCodeFence(text);
+  if (!cleaned.startsWith('{') && !cleaned.startsWith('[')) return null;
 
   try {
-    const parsed = JSON.parse(trimmed);
-    return {
-      toolCalls: Array.isArray(parsed.tool_calls) ? parsed.tool_calls : [],
-      finalMessage: typeof parsed.final_message === 'string' ? parsed.final_message.trim() : ''
-    };
+    return JSON.parse(cleaned);
   } catch {
-    return {
-      toolCalls: [],
-      finalMessage: trimmed
-    };
+    return null;
   }
+}
+
+function parseToolCallsFromJson(parsed) {
+  if (Array.isArray(parsed)) {
+    return parsed.map(normalizeToolCall).filter(Boolean);
+  }
+
+  if (Array.isArray(parsed.tool_calls)) {
+    return parsed.tool_calls.map(normalizeToolCall).filter(Boolean);
+  }
+
+  if (parsed.tool_calls && typeof parsed.tool_calls === 'object') {
+    return [normalizeToolCall(parsed.tool_calls)];
+  }
+
+  const single = normalizeToolCall(parsed);
+  if (single && single.name && TOOL_NAMES.has(single.name)) {
+    return [single];
+  }
+
+  return [];
+}
+
+function tryParseXmlToolCalls(text) {
+  const calls = [];
+  const toolCallRe = /<tool_call\b([^>]*)>([\s\S]*?)<\/tool_call>/gi;
+  let match;
+
+  while ((match = toolCallRe.exec(text)) !== null) {
+    const attrs = match[1].trim();
+    const body = match[2].trim();
+
+    let name = '';
+    const nameMatch = attrs.match(/name\s*=\s*"([^"]+)"/);
+    if (nameMatch) {
+      name = nameMatch[1];
+    } else {
+      name = body.split(/\s+/)[0];
+    }
+
+    if (!name || !TOOL_NAMES.has(name)) continue;
+
+    const args = {};
+    const argRe = /<(\w+)>([\s\S]*?)<\/\1>/gi;
+    let argMatch;
+    while ((argMatch = argRe.exec(body)) !== null) {
+      args[argMatch[1]] = argMatch[2].trim();
+    }
+
+    calls.push({ name, arguments: args });
+  }
+
+  return calls;
+}
+
+function tryParseShorthandToolCall(text) {
+  const lines = text.trim().split('\n');
+  for (const line of lines) {
+    const cleaned = line.trim().replace(/^[`*_~]+|[`*_~]+$/g, '').trim();
+    if (TOOL_NAMES.has(cleaned)) {
+      return [{ name: cleaned, arguments: {} }];
+    }
+  }
+  return [];
+}
+
+export function parseToolResponse(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return { toolCalls: [], finalMessage: '' };
+
+  let finalMessage = '';
+  let toolCalls = [];
+
+  const parsed = tryParseJson(trimmed);
+  if (parsed) {
+    toolCalls = parseToolCallsFromJson(parsed);
+    if (typeof parsed.final_message === 'string') finalMessage = parsed.final_message.trim();
+    if (!finalMessage && typeof parsed.response === 'string') finalMessage = parsed.response.trim();
+    if (toolCalls.length > 0 || finalMessage) {
+      return { toolCalls, finalMessage };
+    }
+  }
+
+  toolCalls = tryParseXmlToolCalls(trimmed);
+  if (toolCalls.length > 0) {
+    return { toolCalls, finalMessage: '' };
+  }
+
+  toolCalls = tryParseShorthandToolCall(trimmed);
+  if (toolCalls.length > 0) {
+    return { toolCalls, finalMessage: '' };
+  }
+
+  return { toolCalls: [], finalMessage: trimmed };
+}
+
+function resolveArg(args, ...keys) {
+  for (const key of keys) {
+    const val = args[key];
+    if (val !== undefined && val !== null) return val;
+  }
+  return undefined;
 }
 
 export async function runToolCall(toolCall, context) {
@@ -89,7 +202,7 @@ export async function runToolCall(toolCall, context) {
   }
 
   if (name === 'replace_system_prompt') {
-    const content = String(args.content || '');
+    const content = String(resolveArg(args, 'content', 'text', 'prompt') || '');
     if (!content.trim()) {
       return {
         name,
@@ -124,7 +237,7 @@ export async function runToolCall(toolCall, context) {
 
   if (name === 'read_repo_file') {
     try {
-      const path = assertReadableRepoPath(args.path);
+      const path = assertReadableRepoPath(resolveArg(args, 'path', 'file_path', 'file_name', 'filename', 'name'));
       return {
         name,
         ok: true,
@@ -141,9 +254,9 @@ export async function runToolCall(toolCall, context) {
 
   if (name === 'propose_code_change') {
     try {
-      const targetPath = String(args.path || '');
-      const reason = String(args.reason || '').trim();
-      const content = String(args.content || '');
+      const targetPath = String(resolveArg(args, 'path', 'file_path', 'file_name', 'filename', 'name') || '');
+      const reason = String(resolveArg(args, 'reason', 'description', 'why', 'purpose') || '').trim();
+      const content = String(resolveArg(args, 'content', 'code', 'body', 'text') || '');
       const proposalPath = writeCodeProposal(targetPath, reason, content);
 
       return {
@@ -170,8 +283,8 @@ export async function runToolCall(toolCall, context) {
     }
 
     try {
-      const path = assertWritableRepoPath(args.path);
-      const content = String(args.content || '');
+      const path = assertWritableRepoPath(resolveArg(args, 'path', 'file_path', 'file_name', 'filename', 'name'));
+      const content = String(resolveArg(args, 'content', 'code', 'body', 'text') || '');
       if (!content.trim()) throw new Error('content is required');
       if (content.length > MAX_CODE_WRITE_CHARS) {
         throw new Error(`content exceeds ${MAX_CODE_WRITE_CHARS} characters`);
@@ -192,8 +305,8 @@ export async function runToolCall(toolCall, context) {
     }
   }
 
-  if (name === 'remember_status_message') {
-    const message = String(args.message || '').replace(/\s+/g, ' ').trim();
+  if (name === 'post_to_feed') {
+    const message = String(resolveArg(args, 'message', 'text', 'content', 'body') || '').replace(/\s+/g, ' ').trim();
     if (!message) {
       return {
         name,
@@ -202,7 +315,11 @@ export async function runToolCall(toolCall, context) {
       };
     }
 
-    if (message.length > MAX_STATUS_CHARS) {
+    const botName = context.name || 'Good Citizen';
+    const prefix = `${botName} check-in:`;
+    const fullMessage = message.startsWith(prefix) ? message : `${prefix} ${message}`;
+
+    if (fullMessage.length > MAX_STATUS_CHARS) {
       return {
         name,
         ok: false,
@@ -210,12 +327,20 @@ export async function runToolCall(toolCall, context) {
       };
     }
 
-    context.statusMessage = message;
-    return {
-      name,
-      ok: true,
-      result: 'Saved status message for this tick.'
-    };
+    try {
+      await postMessage(context.email, fullMessage, { name: context.name });
+      return {
+        name,
+        ok: true,
+        result: 'Message posted to feed successfully.'
+      };
+    } catch (error) {
+      return {
+        name,
+        ok: false,
+        error: formatToolError(error)
+      };
+    }
   }
 
   return {

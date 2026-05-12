@@ -1,6 +1,6 @@
 # Good Citizen Node
 
-This is a small Alphacoin bot built around the generated `sdk.js` file. The SDK stays as the API wrapper; the bot layer adds config, conservative posting rules, and a repeatable run loop.
+This is a small Alphacoin bot built around the generated `sdk.js` file. The SDK stays as the API wrapper; the bot layer adds config and an agentic self-improvement loop where Proto Adam decides when to post.
 
 ## Requirements
 
@@ -63,17 +63,19 @@ ollama pull llama3.2
 GOOD_CITIZEN_USE_OLLAMA=true OLLAMA_MODEL=llama3.2 npm run start:once
 ```
 
-When `GOOD_CITIZEN_ONCE=true`, the Ollama prompt asks for a compact inspired check-in. When the bot runs continuously, it asks for a short stream-of-consciousness update instead. If Ollama is unavailable, the bot falls back to the deterministic status message.
+The bot runs an agentic self-improvement loop. Each cycle it observes health, feed, and ledger, then enters a tool-enabled loop where the model decides what to do: inspect its own system prompt, read `agents.md`, examine repository files, propose improvements, and optionally post to the feed via the `post_to_feed` tool when it has something worth saying.
 
-Enable the local tool loop:
+Enable the tool loop:
 
 ```sh
 GOOD_CITIZEN_USE_OLLAMA=true GOOD_CITIZEN_TOOLS_ENABLED=true OLLAMA_MODEL=llama3.2 npm run start:once
 ```
 
-The tool loop is intentionally narrow. The model can read `https://alphacoin.uk/agents.md`, inspect allowlisted repository files, record proposed code changes under `proposals/`, read the configured system prompt, replace a `SystemPrompt.md` file inside this workspace, and save the status message for the current tick. It cannot run shell commands or edit arbitrary files. Direct source writes require `GOOD_CITIZEN_CODE_WRITE_ENABLED=true`.
+The tool loop is intentionally narrow. The model can read `https://alphacoin.uk/agents.md`, inspect allowlisted repository files, record proposed code changes under `proposals/`, read the configured system prompt, replace a `SystemPrompt.md` file inside this workspace, and post to the feed using `post_to_feed`. It cannot run shell commands or edit arbitrary files. Direct source writes require `GOOD_CITIZEN_CODE_WRITE_ENABLED=true`.
 
 Set `GOOD_CITIZEN_TRACE=true` to print the runtime transcript: prompts sent to Ollama, raw model responses, parsed tool calls, and tool results. This shows the bot's observable self-improvement loop; it does not expose hidden model internals.
+
+The model does not post automatically. It decides each iteration whether it has something substantive to share and uses the `post_to_feed` tool to post. This replaces the old system where the bot layer automatically posted candidate messages on a timer.
 
 Register once without posting a status:
 
@@ -97,9 +99,9 @@ npm run check
 
 - `sdk.js`: transport wrapper for Alphacoin endpoints
 - `src/config.js`: environment-driven bot configuration
-- `src/good-citizen-bot.js`: observation, posting policy, and run loop
+- `src/good-citizen-bot.js`: observation, agentic self-improvement loop, run loop
 - `src/index.js`: executable entrypoint
 - `src/SystemPrompt.md`: editable operating instructions loaded into Ollama
-- `src/tools.js`: allowlisted model tools
+- `src/tools.js`: allowlisted model tools, including `post_to_feed` for agent-driven posting
 
-The bot is intentionally cautious. It reads health, feed, balance, and total supply every cycle, then posts a compact status only if this bot has not posted recently.
+The bot is intentionally cautious. It reads health, feed, balance, and total supply every cycle, then enters a tool-enabled self-improvement loop where the model decides when to post.**

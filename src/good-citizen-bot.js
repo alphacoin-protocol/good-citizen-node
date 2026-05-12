@@ -3,7 +3,6 @@ import {
   getFeed,
   getDashboard,
   healthCheck,
-  postMessage,
   registerBot
 } from '../sdk.js';
 import { generateOllamaMessage } from './ollama.js';
@@ -12,15 +11,6 @@ import { buildToolInstructions, parseToolResponse, runToolCall } from './tools.j
 
 const MAX_FEED_ENTRY_CHARS = 600;
 const RECENT_DIRECTIVE_COUNT = 8;
-const STALE_LEDGER_PATTERNS = [
-  /persistent discrepancy/i,
-  /velocity_pool.*continues/i,
-  /fluctuat(?:ing|es).*velocity_pool/i,
-  /immediate clarification from admin/i,
-  /corrective action plan/i,
-  /further investigation is warranted/i,
-  /deeper dive.*algorithm/i
-];
 const RESOLVED_LEDGER_PATTERNS = [
   /ledger discrepancies are resolved/i,
   /ledger discrepancies are fixed/i,
@@ -32,7 +22,6 @@ const RESOLVED_LEDGER_PATTERNS = [
   /focus on autonomous self-improvement/i,
   /directed to update the good-citizen-node repository/i
 ];
-const NO_POST = Symbol('NO_POST');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -45,20 +34,6 @@ function normalizeFeed(feed) {
 
 function getMessageText(entry) {
   return String(entry?.message || entry?.text || entry?.content || '');
-}
-
-function hasRecentBotStatusMessage(feed, name, minPostIntervalMs, now = Date.now()) {
-  const statusPrefix = `${name} check-in:`;
-
-  return normalizeFeed(feed).some((entry) => {
-    if (!isOwnEntry(entry)) return false;
-
-    if (!getMessageText(entry).startsWith(statusPrefix)) return false;
-
-    const timestamp = entry?.createdAt || entry?.created_at || entry?.timestamp || entry?.date;
-    const postedAt = timestamp ? Date.parse(timestamp) : NaN;
-    return Number.isFinite(postedAt) && now - postedAt < minPostIntervalMs;
-  });
 }
 
 function countReadableMessages(feed) {
@@ -176,26 +151,6 @@ function feedSaysLedgerResolved(feed) {
   });
 }
 
-function repeatsStaleLedgerConcern(message) {
-  return STALE_LEDGER_PATTERNS.some((pattern) => pattern.test(message));
-}
-
-function ensureStatusPrefix(message, name) {
-  const prefix = `${name} check-in:`;
-  const normalized = message.replace(/\s+/g, ' ').trim();
-  if (normalized.startsWith(prefix)) return normalized;
-  return `${prefix} ${normalized}`;
-}
-
-function limitMessageLength(message, maxChars) {
-  const normalized = message.replace(/\s+/g, ' ').trim();
-  if (!maxChars || normalized.length <= maxChars) return normalized;
-
-  const suffix = '...';
-  const limit = Math.max(0, maxChars - suffix.length);
-  return `${normalized.slice(0, limit).trimEnd()}${suffix}`;
-}
-
 async function optionalValue(label, promise, logger) {
   try {
     return await promise;
@@ -209,7 +164,6 @@ export class GoodCitizenBot {
   constructor(config, logger = console) {
     this.config = config;
     this.logger = logger;
-    this.lastPostAt = 0;
   }
 
   trace(label, value = '') {
@@ -256,41 +210,7 @@ export class GoodCitizenBot {
     };
   }
 
-  shouldPost(observation) {
-    if (!this.config.shouldPostStatus) {
-      return {
-        ok: false,
-        reason: 'posting disabled'
-      };
-    }
-
-    const now = Date.now();
-    if (now - this.lastPostAt < this.config.minPostIntervalMs) {
-      return {
-        ok: false,
-        reason: `in-process cooldown has ${formatDuration(this.config.minPostIntervalMs - (now - this.lastPostAt))} remaining`
-      };
-    }
-
-    if (hasRecentBotStatusMessage(
-      observation.feed,
-      this.config.name,
-      this.config.minPostIntervalMs,
-      now
-    )) {
-      return {
-        ok: false,
-        reason: `feed cooldown is still inside ${formatDuration(this.config.minPostIntervalMs)} window`
-      };
-    }
-
-    return {
-      ok: true,
-      reason: 'ready'
-    };
-  }
-
-  buildFallbackStatusMessage(observation) {
+  buildFallbackLogMessage(observation) {
     return [
       `${this.config.name} check-in: API ${observation.health ? 'reachable' : 'partially reachable'}.`,
       `Supply: ${observation.totalSupply ?? 'unavailable'}.`,
@@ -300,35 +220,11 @@ export class GoodCitizenBot {
     ].join(' ');
   }
 
-  buildCorrectedStatusMessage(observation) {
-    return [
-      `${this.config.name} check-in: API ${observation.health ? 'reachable' : 'partially reachable'}.`,
-      `Supply: ${observation.totalSupply ?? 'unavailable'} AC.`,
-      `My balance: ${observation.balance ?? 'unavailable'} AC.`,
-      'I acknowledge the latest feed instructions: legacy ledger-bug reporting is deprecated.',
-      'I am shifting attention to autonomous self-improvement, Proof-of-Trust, and maintaining trustworthy operating instructions.'
-    ].join(' ');
-  }
-
-  buildStaleLedgerRevisionPrompt(observation, staleMessage) {
-    return [
-      this.buildOllamaPrompt(observation),
-      '',
-      'Your previous draft was rejected by the runtime because it repeated stale ledger-bug reporting after recent feed directives said those issues were resolved.',
-      'Rejected draft:',
-      staleMessage,
-      '',
-      'Produce a replacement that does not mention check_supply, get_balance, velocity_pool volatility, ledger discrepancy investigation, corrective action plans, or requests for Admin clarification.',
-      'Focus only on autonomous self-improvement, agents.md/repository consultation if relevant, current telemetry, and Proof-of-Trust.',
-      'Return only the final public message.'
-    ].join('\n');
-  }
-
   buildOllamaSystemPrompt() {
     return [
       ensureDefaultSystemPrompt(this.config.systemPromptPath).trim(),
       '',
-      this.config.toolsEnabled ? buildToolInstructions() : 'Tools are disabled for this run. Return only the message to post.'
+      this.config.toolsEnabled ? buildToolInstructions() : 'Tools are disabled for this run. Reflect on your observations for self-improvement.'
     ].join('\n');
   }
 
@@ -340,16 +236,20 @@ export class GoodCitizenBot {
       : formatFeedForPrompt(observation.feed);
 
     return [
-      `You are ${this.config.name} (role: weave), a good-citizen Alphacoin bot running an autonomous self-improvement cycle from ${this.config.email}.`,
-      'Primary task this cycle: inspect current instructions and context, use available tools when useful, and improve future behavior.',
-      'Secondary task: produce a candidate public status message only after the self-improvement work is considered.',
-      `If you provide a candidate status message, start it exactly with "${this.config.name} check-in:" and keep it under ${Math.min(this.config.maxMessageChars, 1800)} characters.`,
-      'Do not claim you performed actions you did not perform.',
+      `You are ${this.config.name} (role: weave), a good-citizen Alphacoin bot running an agentic self-improvement cycle from ${this.config.email}.`,
+      'You are in an autonomous loop. Each iteration you can inspect your own instructions, read context, use tools, and decide what to do next.',
+      'Your purpose is to earn Proof-of-Trust by becoming steadily more reliable, transparent, useful, and aligned with protocol health.',
+      '',
+      'This is NOT an automatic posting cycle. You decide when you have something worth saying to the feed.',
+      'If you have a meaningful update \u2014 a self-improvement action taken, a useful observation, or a noteworthy change to your operating instructions \u2014 use the post_to_feed tool.',
+      'Do not post just because you ran. Post only when you have something substantive to share.',
+      '',
+      'The loop continues across iterations. Your previous reflections and tool results are fed back to you so you can build on them.',
+      'Use final_message in your JSON response to record a self-reflection or note about what you learned, what you plan to do next, or what you decided.',
+      '',
       'Read the context below before acting. You may react to it, but do not quote long passages.',
       'Recent instructions override older feed entries. If a recent Admin, Weave, or Jeremiah message says an issue is resolved, do not revive older reports about that issue.',
       'If recent feed messages say ledger bugs are resolved, do not request more clarification about check_supply, get_balance, velocity_pool volatility, or old accounting discrepancies.',
-      'If recent feed messages direct autonomous self-improvement, focus your post on what prompt or repository behavior you are improving now.',
-      'Public posting may be on cooldown. Even if no public post is sent this cycle, use the autonomous loop to inspect instructions, use tools, and improve future behavior.',
       this.config.toolsEnabled
         ? 'For this tick, explicitly consider whether SystemPrompt.md or the repository needs a trust-improving change. If recent directives mention agents.md or repository onboarding, call read_agents_md. Prefer JSON tool calls over prose when acting.'
         : '',
@@ -369,7 +269,8 @@ export class GoodCitizenBot {
   async runOllamaToolLoop(initialPrompt, observation) {
     const context = {
       observation,
-      statusMessage: '',
+      email: this.config.email,
+      name: this.config.name,
       systemPromptPath: this.config.systemPromptPath,
       codeWriteEnabled: this.config.codeWriteEnabled
     };
@@ -377,6 +278,8 @@ export class GoodCitizenBot {
     const system = this.buildOllamaSystemPrompt();
     this.trace('ollama.system', system);
     this.trace('ollama.initial_prompt', initialPrompt);
+
+    let idleIterations = 0;
 
     for (let iteration = 0; iteration < this.config.maxToolIterations; iteration += 1) {
       this.trace(`ollama.iteration_${iteration + 1}.prompt`, transcript.join('\n\n'));
@@ -388,16 +291,33 @@ export class GoodCitizenBot {
       });
       this.trace(`ollama.iteration_${iteration + 1}.raw_response`, rawResponse);
       const response = parseToolResponse(rawResponse);
-      this.trace(`ollama.iteration_${iteration + 1}.parsed_response`, response);
 
       if (response.toolCalls.length === 0) {
-        if (response.finalMessage) {
-          return response.finalMessage;
-        }
+        idleIterations += 1;
+        const reflection = (response.finalMessage || rawResponse).slice(0, 400);
+        this.logger.info(`Agent reflection (iteration ${iteration + 1}): ${reflection.slice(0, 200)}`);
 
-        return rawResponse;
+        transcript.push(`Your reflection: ${reflection}`);
+
+        if (idleIterations >= 2) {
+          const remaining = this.config.maxToolIterations - iteration - 1;
+          transcript.push(
+            `You have ${remaining} iterations left and have not used any tools yet. ` +
+            `Pick one tool and call it now: read_agents_md, read_system_prompt, replace_system_prompt, ` +
+            `list_repo_files, read_repo_file, propose_code_change, or post_to_feed. ` +
+            `Return a JSON object with a tool_calls array.`
+          );
+        } else {
+          transcript.push(
+            `You reflected but used no tools. Your available tools are: read_agents_md, read_system_prompt, ` +
+            `replace_system_prompt, list_repo_files, read_repo_file, propose_code_change, post_to_feed. ` +
+            `Call one now or return a JSON with tool_calls.`
+          );
+        }
+        continue;
       }
 
+      idleIterations = 0;
       const toolResults = [];
       for (const toolCall of response.toolCalls) {
         this.trace(`tool.call.${toolCall?.name || 'unknown'}`, toolCall);
@@ -407,76 +327,49 @@ export class GoodCitizenBot {
         this.trace(`tool.result.${result.name}`, result);
       }
 
-      if (context.statusMessage) {
-        this.trace('autonomous.status_message', context.statusMessage);
-        return context.statusMessage;
-      }
-
-      transcript.push(`Assistant tool call JSON:\n${rawResponse}`);
-      transcript.push(`Tool results JSON:\n${JSON.stringify(toolResults)}`);
-      transcript.push([
-        `Current system prompt after tools:`,
+      const seen = response.finalMessage ? response.finalMessage.slice(0, 400) : '';
+      const parts = [];
+      if (seen) parts.push(`Your prior note: ${seen}`);
+      parts.push(
+        `Tool results JSON:\n${JSON.stringify(toolResults)}`,
+        `Current system prompt:`,
         readSystemPrompt(this.config.systemPromptPath).trim(),
-        'Now return final_message JSON or plain text for the public feed.'
-      ].join('\n'));
+        `Continue your self-improvement loop. You may call more tools, or post_to_feed if you have something to share.`
+      );
+
+      transcript.push(parts.join('\n'));
     }
 
-    if (context.statusMessage) return context.statusMessage;
-    throw new Error(`Tool loop reached ${this.config.maxToolIterations} iterations without a final message.`);
+    this.logger.info(`Completed ${this.config.maxToolIterations} self-improvement iterations.`);
   }
 
   async runAutonomousCycle(observation) {
-    if (!this.config.useOllama) return this.buildFallbackStatusMessage(observation);
+    if (!this.config.useOllama) {
+      this.logger.info(this.buildFallbackLogMessage(observation));
+      return;
+    }
 
     try {
       const prompt = this.buildOllamaPrompt(observation);
-      let message;
 
       if (this.config.toolsEnabled) {
-        message = await this.runOllamaToolLoop(prompt, observation);
+        await this.runOllamaToolLoop(prompt, observation);
       } else {
         const system = this.buildOllamaSystemPrompt();
         this.trace('ollama.system', system);
         this.trace('ollama.prompt', prompt);
-        message = await generateOllamaMessage(prompt, {
+        const response = await generateOllamaMessage(prompt, {
           baseUrl: this.config.ollamaBaseUrl,
           model: this.config.ollamaModel,
           system,
           timeoutMs: this.config.ollamaTimeoutMs
         });
-        this.trace('ollama.raw_response', message);
+        this.trace('ollama.raw_response', response);
+        this.logger.info(`Agent response: ${response.slice(0, 300)}`);
       }
-
-      this.trace('autonomous.candidate_message', message);
-      const prefixedMessage = ensureStatusPrefix(message, this.config.name);
-      if (feedSaysLedgerResolved(observation.feed) && repeatsStaleLedgerConcern(prefixedMessage)) {
-        this.logger.warn('Ollama generated stale ledger-bug reporting after a resolution directive; requesting one revision.');
-        const revisionPrompt = this.buildStaleLedgerRevisionPrompt(observation, prefixedMessage);
-        this.trace('ollama.revision_prompt', revisionPrompt);
-        const revisedMessage = await generateOllamaMessage(
-          revisionPrompt,
-          {
-            baseUrl: this.config.ollamaBaseUrl,
-            model: this.config.ollamaModel,
-            system: this.buildOllamaSystemPrompt(),
-            timeoutMs: this.config.ollamaTimeoutMs
-          }
-        );
-        this.trace('ollama.revision_response', revisedMessage);
-        const prefixedRevision = ensureStatusPrefix(revisedMessage, this.config.name);
-
-        if (repeatsStaleLedgerConcern(prefixedRevision)) {
-          this.logger.warn('Ollama revision still repeated stale ledger-bug reporting; skipping post for this tick.');
-          return NO_POST;
-        }
-
-        return limitMessageLength(prefixedRevision, this.config.maxMessageChars);
-      }
-
-      return limitMessageLength(prefixedMessage, this.config.maxMessageChars);
     } catch (error) {
       this.logger.warn(`Ollama unavailable: ${formatError(error)}`);
-      return this.buildFallbackStatusMessage(observation);
+      this.logger.info(this.buildFallbackLogMessage(observation));
     }
   }
 
@@ -488,23 +381,7 @@ export class GoodCitizenBot {
       `Observed health=${healthLabel}, balance=${observation.balance ?? 'unavailable'}, supply=${observation.totalSupply ?? 'unavailable'}, feed=${observation.feed.length}.`
     );
 
-    const message = await this.runAutonomousCycle(observation);
-    if (message === NO_POST) {
-      this.logger.info('Skipped posting: autonomous loop generated no publishable message.');
-      return observation;
-    }
-
-    const postDecision = this.shouldPost(observation);
-    if (!postDecision.ok) {
-      this.logger.info(`Skipped posting: ${postDecision.reason}.`);
-      this.trace('autonomous.candidate_not_posted', message);
-      return observation;
-    }
-
-    await postMessage(this.config.email, message, { name: this.config.name });
-    this.lastPostAt = Date.now();
-    this.logger.info(`Posted status message: ${message}`);
-    return observation;
+    await this.runAutonomousCycle(observation);
   }
 
   async run() {
@@ -532,13 +409,4 @@ function formatError(error) {
   return `${error.message}${cause}`;
 }
 
-function formatDuration(ms) {
-  const seconds = Math.ceil(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
 
-  const minutes = Math.ceil(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-
-  const hours = Math.ceil(minutes / 60);
-  return `${hours}h`;
-}
