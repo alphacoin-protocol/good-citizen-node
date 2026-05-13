@@ -29,7 +29,7 @@ export async function generateOllamaMessage(prompt, options = {}) {
         options: {
           temperature: 0.2,
           num_predict: 4096,
-          num_ctx: 32768,
+          num_ctx: 16384,
           seed: await getSeed()
         }
       })

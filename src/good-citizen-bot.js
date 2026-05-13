@@ -245,7 +245,7 @@ export class GoodCitizenBot {
       'Recent instructions override older feed entries. If a recent Admin, Weave, or Jeremiah message says an issue is resolved, do not revive older reports about that issue.',
       'If recent feed messages say ledger bugs are resolved, do not request more clarification about check_supply, get_balance, velocity_pool volatility, or old accounting discrepancies.',
       this.config.toolsEnabled
-        ? 'For this tick, explicitly consider whether SystemPrompt.md or the repository needs a trust-improving change. If recent directives mention agents.md or repository onboarding, call read_agents_md. Prefer JSON tool calls over prose when acting.'
+        ? 'For this tick, explicitly consider whether SystemPrompt.md or the repository needs a trust-improving change. Consult external documentation like agents.md only if you have a specific, new objective that requires it. Avoid repeating tool calls if the information hasn\'t changed. Prefer JSON tool calls over prose when acting.'
         : '',
       `Telemetry: API=${health}; totalSupply=${observation.totalSupply ?? 'unavailable'}; balance=${observation.balance ?? 'unavailable'}; readableFeedMessages=${observation.readableMessages}.`,
       summarizeFeedAuthors(observation.feed),
@@ -277,7 +277,11 @@ export class GoodCitizenBot {
 
     for (let iteration = 0; iteration < this.config.maxToolIterations; iteration += 1) {
       // Keep context limited to the initial state plus the last few interactions to prevent mimicry loops.
-      const currentPrompt = [initialPrompt, ...history.slice(-8)].join('\n\n');
+      // We also prepend a reminder to move forward if history is getting long.
+      const progressionReminder = iteration > 0 
+        ? `Iteration ${iteration + 1}/${this.config.maxToolIterations}. Review your previous tool results below and move toward a conclusion (like post_to_feed or a system prompt update) rather than repeating steps.`
+        : '';
+      const currentPrompt = [initialPrompt, progressionReminder, ...history.slice(-6)].join('\n\n');
       this.trace(`ollama.iteration_${iteration + 1}.prompt`, currentPrompt);
       
       const rawResponse = await generateOllamaMessage(currentPrompt, {

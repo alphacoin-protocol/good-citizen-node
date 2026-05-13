@@ -1,7 +1,12 @@
 const url = 'http://lfdr.de/qrng_api/qrng?length=4&type=BINARY';
+const TIMEOUT_MS = 5000;
 
 async function getRandom() {
-    const response = await fetch(url);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+    try {
+        const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) {
         throw new Error(`Failed to fetch QRNG data: ${response.status} ${response.statusText}`);
     }
@@ -10,6 +15,14 @@ async function getRandom() {
         throw new Error('Invalid QRNG response format');
     }
     return data.qrn;
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            throw new Error(`QRNG request timed out after ${TIMEOUT_MS}ms`);
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
+    }
 }
 
 export async function getSeed() {
@@ -22,7 +35,10 @@ export async function getSeed() {
         const uint32Seed = parseInt(binaryString, 2) >>> 0;
         return uint32Seed;
     } catch (error) {
-        console.error('Error fetching QRNG data:', error);
-        throw error;
+        // Fallback to a local random seed if the QRNG service is unreachable.
+        // This ensures the bot keeps running even on poor WiFi.
+        const fallbackSeed = Math.floor(Math.random() * 0xFFFFFFFF) >>> 0;
+        console.warn(`QRNG unavailable (${error.message}). Using local fallback seed: ${fallbackSeed}`);
+        return fallbackSeed;
     }
 }
