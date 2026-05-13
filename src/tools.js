@@ -65,11 +65,6 @@ function normalizeToolCall(raw) {
 
   const obj = raw && typeof raw === 'object' ? raw : {};
 
-  // Ignore objects that look like tool results rather than tool calls
-  if (obj.ok !== undefined || obj.result !== undefined || obj.error !== undefined) {
-    return null;
-  }
-
   const name = obj.name || obj.tool || obj.tool_name || obj.function || obj.method || '';
   if (!name || !TOOL_NAMES.has(name)) {
     return null;
@@ -80,7 +75,31 @@ function normalizeToolCall(raw) {
 }
 
 function tryParseJson(text) {
-  const cleaned = stripCodeFence(text);
+  const trimmed = text.trim();
+
+  // 1. Try finding a JSON code block
+  const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (codeBlockMatch) {
+    try {
+      return JSON.parse(codeBlockMatch[1].trim());
+    } catch {
+      // If code block exists but is invalid JSON, keep trying other methods
+    }
+  }
+
+  // 2. Try finding the first '{' and last '}' to extract JSON from prose
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start !== -1 && end !== -1 && end > start) {
+    const candidate = trimmed.slice(start, end + 1);
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // ignore and fall through
+    }
+  }
+
+  const cleaned = stripCodeFence(trimmed);
   if (!cleaned.startsWith('{') && !cleaned.startsWith('[')) return null;
 
   try {
@@ -194,12 +213,20 @@ export async function runToolCall(toolCall, context) {
   const args = parseToolArguments(toolCall?.arguments);
 
   if (name === 'read_agents_md') {
-    const content = await getAgentsMd();
-    return {
-      name,
-      ok: true,
-      result: truncate(content, MAX_REMOTE_DOC_CHARS)
-    };
+    try {
+      const content = await getAgentsMd();
+      return {
+        name,
+        ok: true,
+        result: truncate(content, MAX_REMOTE_DOC_CHARS)
+      };
+    } catch (error) {
+      return {
+        name,
+        ok: false,
+        error: formatToolError(error)
+      };
+    }
   }
 
   if (name === 'read_system_prompt') {

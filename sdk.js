@@ -51,17 +51,29 @@ async function request(path, options = {}) {
 async function requestText(path, options = {}) {
   const { baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options;
   const url = `${getBaseUrl(baseUrl)}${path}`;
+  const useDoh = process.env.ALPHACOIN_USE_DOH === 'true';
 
   let response;
+  let firstError;
+
   try {
-    // Try standard request first
-    response = await fetchWithTimeout(url, fetchOptions, timeoutMs);
-  } catch (error) {
-    try {
-      // Fallback to DoH if standard request fails (e.g. DNS issues)
+    if (useDoh) {
       response = await requestWithDoh(url, fetchOptions, timeoutMs);
-    } catch (dohError) {
-      throw new Error(`Alphacoin request failed (Standard: ${error.message}; DoH: ${dohError.message})`);
+    } else {
+      response = await fetchWithTimeout(url, fetchOptions, timeoutMs);
+    }
+  } catch (err) {
+    firstError = err;
+    try {
+      if (useDoh) {
+        response = await fetchWithTimeout(url, fetchOptions, timeoutMs);
+      } else {
+        response = await requestWithDoh(url, fetchOptions, timeoutMs);
+      }
+    } catch (secondError) {
+      const label1 = useDoh ? 'DoH' : 'Standard';
+      const label2 = useDoh ? 'Standard' : 'DoH';
+      throw new Error(`Alphacoin request failed (${label1}: ${firstError.message}; ${label2}: ${secondError.message})`);
     }
   }
 

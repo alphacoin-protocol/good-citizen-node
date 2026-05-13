@@ -97,15 +97,9 @@ function extractRecentDirectives(feed) {
     .filter((entry) => {
       const normalized = entry.text.toLowerCase();
       return [
-        'proto adam',
-        'resolved',
-        'fixed',
-        'cease',
-        'self-improvement',
-        'systemprompt',
-        'good-citizen-node',
-        'proof-of-trust',
-        'trust'
+        'directive:',
+        'instruction:',
+        'update systemprompt'
       ].some((marker) => normalized.includes(marker));
     });
 
@@ -298,10 +292,13 @@ export class GoodCitizenBot {
       if (response.toolCalls.length === 0) {
         idleIterations += 1;
         const reflection = (response.finalMessage || rawResponse).slice(0, 2000);
+        const hasJsonMarkers = reflection.includes('{') || reflection.includes('tool_calls');
+        const hasResultMarkers = reflection.includes('"ok":') || reflection.includes('"result":') || reflection.includes('"error":');
 
-        // Detect if the model is hallucinating the tool result format instead of making a call
-        if (reflection.includes('"ok":') || reflection.includes('"result":') || reflection.includes('"error":')) {
-          history.push('Note: You provided a JSON object that looks like a tool result. You must return a "tool_calls" array to actually execute a tool. Do NOT mimic the system result format.');
+        if (hasJsonMarkers && hasResultMarkers) {
+          history.push('PROTOCOL ERROR: You provided a JSON object that looks like a completed tool result. I cannot process results you generate yourself. You must provide ONLY the "tool_calls" array with the tool names and arguments you want to execute. Do not include "ok", "result", or "error".');
+        } else if (hasJsonMarkers) {
+          history.push('PROTOCOL ERROR: Your JSON format was invalid or did not match the expected "tool_calls" structure. Ensure you use the exact tool names and a valid JSON array.');
         }
 
         this.logger.info(`Agent reflection (iteration ${iteration + 1}): ${reflection.slice(0, 500)}`);
