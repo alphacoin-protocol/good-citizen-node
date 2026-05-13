@@ -1,4 +1,5 @@
 const DEFAULT_TIMEOUT_MS = 60000;
+import { getSeed } from './qrng.js';
 
 export async function generateOllamaMessage(prompt, options = {}) {
   const {
@@ -26,8 +27,10 @@ export async function generateOllamaMessage(prompt, options = {}) {
         prompt,
         stream: false,
         options: {
-          temperature: 0.6,
-          num_predict: 4096
+          temperature: 0.2,
+          num_predict: 4096,
+          num_ctx: 32768,
+          seed: await getSeed()
         }
       })
     });
