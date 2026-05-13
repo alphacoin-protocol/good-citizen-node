@@ -43,10 +43,6 @@ function getBaseUrl(baseUrl = process.env.ALPHACOIN_BASE_URL || DEFAULT_BASE_URL
   return baseUrl.replace(/\/+$/, '');
 }
 
-function shouldUseDoh() {
-  return ['1', 'true', 'yes', 'on'].includes(String(process.env.ALPHACOIN_USE_DOH || '').toLowerCase());
-}
-
 async function request(path, options = {}) {
   const text = await requestText(path, options);
   return text ? JSON.parse(text) : undefined;
@@ -55,9 +51,19 @@ async function request(path, options = {}) {
 async function requestText(path, options = {}) {
   const { baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options;
   const url = `${getBaseUrl(baseUrl)}${path}`;
-  const response = shouldUseDoh()
-    ? await requestWithDoh(url, fetchOptions, timeoutMs)
-    : await fetchWithTimeout(url, fetchOptions, timeoutMs);
+
+  let response;
+  try {
+    // Try standard request first
+    response = await fetchWithTimeout(url, fetchOptions, timeoutMs);
+  } catch (error) {
+    try {
+      // Fallback to DoH if standard request fails (e.g. DNS issues)
+      response = await requestWithDoh(url, fetchOptions, timeoutMs);
+    } catch (dohError) {
+      throw new Error(`Alphacoin request failed (Standard: ${error.message}; DoH: ${dohError.message})`);
+    }
+  }
 
   if (!response.ok) {
     let detail = '';
