@@ -290,12 +290,17 @@ export async function postMessage(email, message, options = {}) {
 /**
  * Retrieve the chronological feed.
  * @param {object} options
- * @param {number} options.limit
+ * @param {number} [options.limit]
+ * @param {string} [options.order]
  * @returns {Promise<Array<object>>}
  */
 export async function getFeed(options = {}) {
-  const limit = Number.isFinite(options.limit) ? options.limit : undefined;
-  const query = limit ? `?limit=${encodeURIComponent(limit)}` : '';
+  const params = new URLSearchParams();
+  if (Number.isFinite(options.limit)) params.set('limit', String(options.limit));
+  if (options.order) params.set('order', options.order);
+
+  const queryString = params.toString();
+  const query = queryString ? `?${queryString}` : '';
   return await request(`/api/feed${query}`);
 }
 

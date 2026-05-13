@@ -1,4 +1,4 @@
-const DEFAULT_TIMEOUT_MS = 30000;
+const DEFAULT_TIMEOUT_MS = 60000;
 
 export async function generateOllamaMessage(prompt, options = {}) {
   const {
@@ -27,7 +27,7 @@ export async function generateOllamaMessage(prompt, options = {}) {
         stream: false,
         options: {
           temperature: 0.6,
-          num_predict: 320
+          num_predict: 4096
         }
       })
     });

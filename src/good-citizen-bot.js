@@ -83,13 +83,13 @@ function formatEntriesForPrompt(entries) {
 
 function getRecentFeedEntries(feed, count = RECENT_DIRECTIVE_COUNT) {
   const entries = normalizeFeed(feed);
-  return entries.slice(0, count);
+  return entries.slice(-count);
 }
 
 function extractRecentDirectives(feed) {
   const directives = normalizeFeed(feed)
     .filter((entry) => isOwnEntry(entry))
-    .slice(0, RECENT_DIRECTIVE_COUNT)
+    .slice(-RECENT_DIRECTIVE_COUNT)
     .map((entry) => ({
       author: getEntryAuthor(entry),
       text: compactText(getMessageText(entry), 900)
@@ -121,7 +121,7 @@ function extractRecentDirectives(feed) {
 function extractExternalDirectives(feed) {
   const directives = normalizeFeed(feed)
     .filter((entry) => !isOwnEntry(entry))
-    .slice(0, RECENT_DIRECTIVE_COUNT)
+    .slice(-RECENT_DIRECTIVE_COUNT)
     .map((entry) => ({
       author: getEntryAuthor(entry),
       text: compactText(getMessageText(entry), 900)
@@ -197,7 +197,7 @@ export class GoodCitizenBot {
 
     const [health, feed, dashboardData] = await Promise.all([
       optionalValue('Health check', healthCheck(), this.logger),
-      optionalValue('Feed', getFeed({ limit: this.config.feedLimit }), this.logger),
+      optionalValue('Feed', getFeed({ limit: this.config.feedLimit, order: 'asc' }), this.logger),
       dashboard
     ]);
 
@@ -274,7 +274,7 @@ export class GoodCitizenBot {
       systemPromptPath: this.config.systemPromptPath,
       codeWriteEnabled: this.config.codeWriteEnabled
     };
-    const transcript = [initialPrompt];
+    const history = [];
     const system = this.buildOllamaSystemPrompt();
     this.trace('ollama.system', system);
     this.trace('ollama.initial_prompt', initialPrompt);
@@ -282,8 +282,11 @@ export class GoodCitizenBot {
     let idleIterations = 0;
 
     for (let iteration = 0; iteration < this.config.maxToolIterations; iteration += 1) {
-      this.trace(`ollama.iteration_${iteration + 1}.prompt`, transcript.join('\n\n'));
-      const rawResponse = await generateOllamaMessage(transcript.join('\n\n'), {
+      // Keep context limited to the initial state plus the last few interactions to prevent mimicry loops.
+      const currentPrompt = [initialPrompt, ...history.slice(-8)].join('\n\n');
+      this.trace(`ollama.iteration_${iteration + 1}.prompt`, currentPrompt);
+      
+      const rawResponse = await generateOllamaMessage(currentPrompt, {
         baseUrl: this.config.ollamaBaseUrl,
         model: this.config.ollamaModel,
         system,
@@ -294,21 +297,26 @@ export class GoodCitizenBot {
 
       if (response.toolCalls.length === 0) {
         idleIterations += 1;
-        const reflection = (response.finalMessage || rawResponse).slice(0, 400);
-        this.logger.info(`Agent reflection (iteration ${iteration + 1}): ${reflection.slice(0, 200)}`);
+        const reflection = (response.finalMessage || rawResponse).slice(0, 2000);
 
-        transcript.push(`Your reflection: ${reflection}`);
+        // Detect if the model is hallucinating the tool result format instead of making a call
+        if (reflection.includes('"ok":') || reflection.includes('"result":') || reflection.includes('"error":')) {
+          history.push('Note: You provided a JSON object that looks like a tool result. You must return a "tool_calls" array to actually execute a tool. Do NOT mimic the system result format.');
+        }
+
+        this.logger.info(`Agent reflection (iteration ${iteration + 1}): ${reflection.slice(0, 500)}`);
+        history.push(`Your reflection: ${reflection}`);
 
         if (idleIterations >= 2) {
           const remaining = this.config.maxToolIterations - iteration - 1;
-          transcript.push(
+          history.push(
             `You have ${remaining} iterations left and have not used any tools yet. ` +
             `Pick one tool and call it now: read_agents_md, read_system_prompt, replace_system_prompt, ` +
             `list_repo_files, read_repo_file, propose_code_change, or post_to_feed. ` +
             `Return a JSON object with a tool_calls array.`
           );
         } else {
-          transcript.push(
+          history.push(
             `You reflected but used no tools. Your available tools are: read_agents_md, read_system_prompt, ` +
             `replace_system_prompt, list_repo_files, read_repo_file, propose_code_change, post_to_feed. ` +
             `Call one now or return a JSON with tool_calls.`
@@ -327,17 +335,20 @@ export class GoodCitizenBot {
         this.trace(`tool.result.${result.name}`, result);
       }
 
-      const seen = response.finalMessage ? response.finalMessage.slice(0, 400) : '';
+      const seen = response.finalMessage ? response.finalMessage.slice(0, 2000) : '';
       const parts = [];
       if (seen) parts.push(`Your prior note: ${seen}`);
-      parts.push(
-        `Tool results JSON:\n${JSON.stringify(toolResults)}`,
-        `Current system prompt:`,
-        readSystemPrompt(this.config.systemPromptPath).trim(),
-        `Continue your self-improvement loop. You may call more tools, or post_to_feed if you have something to share.`
-      );
 
-      transcript.push(parts.join('\n'));
+      const formattedResults = toolResults.map(r => {
+        const output = r.ok ? r.result : r.error;
+        const outputStr = typeof output === 'string' ? output : JSON.stringify(output, null, 2);
+        return `[RESULT: ${r.name}]\n${r.ok ? 'SUCCESS' : 'FAILURE'}: ${outputStr}`;
+      }).join('\n\n');
+
+      parts.push(`System Feedback:\n${formattedResults}`);
+      parts.push('Continue your self-improvement loop. Use tool calls to act. If you are finished or have nothing more to contribute, you may stop.');
+
+      history.push(parts.join('\n'));
     }
 
     this.logger.info(`Completed ${this.config.maxToolIterations} self-improvement iterations.`);
@@ -408,5 +419,3 @@ function formatError(error) {
   const cause = error.cause instanceof Error ? ` (${error.cause.message})` : '';
   return `${error.message}${cause}`;
 }
-
-

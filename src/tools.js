@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { extname, relative, resolve } from 'node:path';
+import { basename, extname, relative, resolve } from 'node:path';
 import { getAgentsMd, postMessage } from '../sdk.js';
 import { readSystemPrompt, writeSystemPrompt } from './system-prompt.js';
 
@@ -21,6 +21,8 @@ export function buildToolInstructions() {
     'You can call tools using any of these formats:',
     '- JSON: {"tool_calls":[{"name":"read_agents_md","arguments":{}}],"final_message":"note"}',
     '- JSON: {"tool_calls":[{"tool":"read_repo_file","parameters":{"path":"src/tools.js"}}]}',
+    '',
+    'CRITICAL: Your JSON response must NOT contain "ok", "result", or "error" keys. Those are reserved for system feedback. Use only "tool_calls" and "final_message".',
     '- XML: <tool_call>read_agents_md</tool_call>',
     '- XML with args: <tool_call name="propose_code_change"><path>src/X.js</path><reason>fix</reason><content>...</content></tool_call>',
     '- Shorthand: read_system_prompt  (just the tool name on its own line)',
@@ -29,13 +31,13 @@ export function buildToolInstructions() {
     '- read_agents_md: fetches https://alphacoin.uk/agents.md. No arguments needed.',
     '- read_system_prompt: returns the current system prompt. No arguments needed.',
     '- replace_system_prompt: replaces SystemPrompt.md. Arguments: content (string)',
-    '- list_repo_files: lists readable repository files. No arguments needed.',
-    '- read_repo_file: reads an allowlisted file. Arguments: path (string)',
-    '- propose_code_change: records a proposal. Arguments: path, reason, content',
-    '- replace_repo_file: replaces a file (needs CODE_WRITE_ENABLED). Arguments: path, content',
+    '- list_repo_files: lists readable .js, .json, and .md files in the repository. No arguments needed.',
+    '- read_repo_file: reads a file from the list. Arguments: path (string)',
+    '- propose_code_change: records a proposal for .js, .json, or .md files. Arguments: path, reason, content',
+    '- replace_repo_file: replaces an allowlisted file (needs CODE_WRITE_ENABLED). Arguments: path, content',
     '- post_to_feed: posts to the Alphacoin feed. Arguments: message (string)',
     '',
-    'This is a continuous loop. After each tool call, you will see the results and can continue.',
+    'This is a continuous loop. To call tools, return a JSON object with a "tool_calls" array. After each tool call, you will see the results and can continue.',
     'Do not rush to post. Post only when you have a meaningful update.',
     '',
     'If recent feed instructions say to consult agents.md, call read_agents_md before forming conclusions.',
@@ -55,15 +57,25 @@ const TOOL_NAMES = new Set([
 ]);
 
 function stripCodeFence(text) {
-  return text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/, '').trim();
+  return text.replace(/^```(?:json)?\s*\n?/i, '').replace(/```\s*$/, '').trim();
 }
 
 function normalizeToolCall(raw) {
   if (typeof raw === 'string') return null;
 
   const obj = raw && typeof raw === 'object' ? raw : {};
-  const name = obj.name || obj.tool || obj.function || '';
-  const args = obj.arguments || obj.parameters || obj.params || obj.args || {};
+
+  // Ignore objects that look like tool results rather than tool calls
+  if (obj.ok !== undefined || obj.result !== undefined || obj.error !== undefined) {
+    return null;
+  }
+
+  const name = obj.name || obj.tool || obj.tool_name || obj.function || obj.method || '';
+  if (!name || !TOOL_NAMES.has(name)) {
+    return null;
+  }
+
+  const args = obj.arguments || obj.parameters || obj.params || obj.args || obj.props || obj.fields || {};
   return { name, arguments: args };
 }
 
@@ -88,15 +100,12 @@ function parseToolCallsFromJson(parsed) {
   }
 
   if (parsed.tool_calls && typeof parsed.tool_calls === 'object') {
-    return [normalizeToolCall(parsed.tool_calls)];
+    const call = normalizeToolCall(parsed.tool_calls);
+    return call ? [call] : [];
   }
 
   const single = normalizeToolCall(parsed);
-  if (single && single.name && TOOL_NAMES.has(single.name)) {
-    return [single];
-  }
-
-  return [];
+  return single ? [single] : [];
 }
 
 function tryParseXmlToolCalls(text) {
@@ -256,7 +265,7 @@ export async function runToolCall(toolCall, context) {
     try {
       const targetPath = String(resolveArg(args, 'path', 'file_path', 'file_name', 'filename', 'name') || '');
       const reason = String(resolveArg(args, 'reason', 'description', 'why', 'purpose') || '').trim();
-      const content = String(resolveArg(args, 'content', 'code', 'body', 'text') || '');
+      const content = String(resolveArg(args, 'content', 'code', 'body', 'text', 'change', 'diff') || '');
       const proposalPath = writeCodeProposal(targetPath, reason, content);
 
       return {
@@ -284,7 +293,7 @@ export async function runToolCall(toolCall, context) {
 
     try {
       const path = assertWritableRepoPath(resolveArg(args, 'path', 'file_path', 'file_name', 'filename', 'name'));
-      const content = String(resolveArg(args, 'content', 'code', 'body', 'text') || '');
+      const content = String(resolveArg(args, 'content', 'code', 'body', 'text', 'change', 'diff') || '');
       if (!content.trim()) throw new Error('content is required');
       if (content.length > MAX_CODE_WRITE_CHARS) {
         throw new Error(`content exceeds ${MAX_CODE_WRITE_CHARS} characters`);
@@ -410,7 +419,15 @@ function assertWritableRepoPath(path) {
 }
 
 function resolveRepoPath(path) {
-  const resolved = resolve(process.cwd(), String(path || ''));
+  let pathStr = String(path || '');
+  const rootDirName = basename(process.cwd());
+  
+  // Strip leading root directory name if the model prepends it (e.g. "good-citizen-node/package.json")
+  if (pathStr.startsWith(rootDirName + '/')) {
+    pathStr = pathStr.slice(rootDirName.length + 1);
+  }
+
+  const resolved = resolve(process.cwd(), pathStr);
   const repoPath = relative(process.cwd(), resolved);
   if (!repoPath || repoPath.startsWith('..') || repoPath.startsWith('/')) {
     throw new Error('path must stay inside the repository');
