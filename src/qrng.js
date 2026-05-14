@@ -1,11 +1,12 @@
-const url = 'http://lfdr.de/qrng_api/qrng?length=4&type=BINARY';
+const BASE_URL = 'http://lfdr.de/qrng_api/qrng';
 const TIMEOUT_MS = 5000;
 
-async function getRandom() {
+async function getRandom(length = 4, type = 'BINARY') {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
     try {
+        const url = `${BASE_URL}?length=${length}&type=${type}`;
         const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) {
         throw new Error(`Failed to fetch QRNG data: ${response.status} ${response.statusText}`);
@@ -40,5 +41,24 @@ export async function getSeed() {
         const fallbackSeed = Math.floor(Math.random() * 0xFFFFFFFF) >>> 0;
         console.warn(`QRNG unavailable (${error.message}). Using local fallback seed: ${fallbackSeed}`);
         return fallbackSeed;
+    }
+}
+
+/**
+ * Fetches a buffer of unsigned 32-bit integers from the QRNG service.
+ */
+export async function getQRNGBuffer(size = 32) {
+    try {
+        // Fetch hex to get more data density per request
+        const hexString = await getRandom(size * 4, 'HEX');
+        const buffer = [];
+        for (let i = 0; i < hexString.length; i += 8) {
+            const chunk = hexString.substring(i, i + 8);
+            buffer.push(parseInt(chunk, 16) >>> 0);
+        }
+        return buffer;
+    } catch (error) {
+        console.warn(`Buffer fetch failed: ${error.message}. Generating local buffer.`);
+        return Array.from({ length: size }, () => Math.floor(Math.random() * 0xFFFFFFFF) >>> 0);
     }
 }

@@ -5,6 +5,7 @@ import {
   healthCheck,
   registerBot
 } from '../sdk.js';
+import { getQRNGBuffer } from './qrng.js';
 import { generateOllamaMessage } from './ollama.js';
 import { ensureDefaultSystemPrompt, readSystemPrompt } from './system-prompt.js';
 import { buildToolInstructions, parseToolResponse, runToolCall } from './tools.js';
@@ -266,7 +267,8 @@ export class GoodCitizenBot {
       email: this.config.email,
       name: this.config.name,
       systemPromptPath: this.config.systemPromptPath,
-      codeWriteEnabled: this.config.codeWriteEnabled
+      codeWriteEnabled: this.config.codeWriteEnabled,
+      bot: this // Pass the bot instance to allow calling its methods
     };
     const history = [];
     const system = this.buildOllamaSystemPrompt();
@@ -411,6 +413,39 @@ export class GoodCitizenBot {
         await sleep(this.config.intervalMs);
       }
     } while (!this.config.runOnce);
+  }
+
+  /**
+   * Generates an artistic piece by using a QRN to seed every single token.
+   */
+  async generateQuantumArt(prompt, tokenLimit = 50) {
+    this.logger.info(`Starting Quantum Art generation (limit: ${tokenLimit} tokens)...`);
+    
+    const seeds = await getQRNGBuffer(tokenLimit);
+    let fullText = "";
+    let currentPrompt = prompt;
+
+    for (let i = 0; i < seeds.length; i++) {
+      const seed = seeds[i];
+      
+      // Request exactly ONE token per seed
+      const token = await generateOllamaMessage(currentPrompt, {
+        model: this.config.ollamaModel,
+        system: "Generate only the next immediate word or character. No prose, no explanations.",
+        seed: seed,
+        temperature: 2.0, // Maximum creative entropy
+        num_predict: 1,   // Single token generation
+        raw: true         // Bypass template formatting for purer token selection
+      });
+
+      process.stdout.write(token);
+      fullText += token;
+      currentPrompt += token;
+    }
+
+    process.stdout.write('\n');
+    this.logger.info("Quantum Art complete.");
+    return fullText;
   }
 }
 

@@ -35,6 +35,7 @@ export function buildToolInstructions() {
     '- read_repo_file: reads a file from the list. Arguments: path (string)',
     '- propose_code_change: records a proposal for .js, .json, or .md files. Arguments: path, reason, content',
     '- replace_repo_file: replaces an allowlisted file (needs CODE_WRITE_ENABLED). Arguments: path, content',
+    '- generate_quantum_art: creates an artistic piece using QRNG entropy for every token. Arguments: prompt (string), limit (number)',
     '- post_to_feed: posts to the Alphacoin feed. Arguments: message (string)',
     '',
     'This is a continuous loop. To call tools, return a JSON object with a "tool_calls" array. After each tool call, you will see the results and can continue.',
@@ -53,7 +54,7 @@ export function buildToolInstructions() {
 const TOOL_NAMES = new Set([
   'read_agents_md', 'read_system_prompt', 'replace_system_prompt',
   'list_repo_files', 'read_repo_file', 'propose_code_change',
-  'replace_repo_file', 'post_to_feed'
+  'replace_repo_file', 'post_to_feed', 'generate_quantum_art'
 ]);
 
 function stripCodeFence(text) {
@@ -338,6 +339,22 @@ export async function runToolCall(toolCall, context) {
         ok: false,
         error: formatToolError(error)
       };
+    }
+  }
+
+  if (name === 'generate_quantum_art') {
+    const prompt = String(resolveArg(args, 'prompt', 'text') || 'Quantum entropy:');
+    const limit = parseInt(resolveArg(args, 'limit', 'tokenLimit', 'count') || '50', 10);
+
+    try {
+      const art = await context.bot.generateQuantumArt(prompt, limit);
+      return {
+        name,
+        ok: true,
+        result: `Generated art: ${art}`
+      };
+    } catch (error) {
+      return { name, ok: false, error: error.message };
     }
   }
 
