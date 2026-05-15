@@ -425,6 +425,8 @@ export class GoodCitizenBot {
     let fullText = "";
     let currentPrompt = prompt;
 
+    process.stdout.write(process.env.QUANTUM_PROMPT); // Initial prompt display
+
     for (let i = 0; i < seeds.length; i++) {
       const seed = seeds[i];
       

@@ -5,7 +5,7 @@ const config = loadConfig();
 const bot = new GoodCitizenBot(config);
 
 if (process.env.TEST_QUANTUM === 'true') {
-  const artPrompt = process.env.QUANTUM_PROMPT || "The quantum field of Proto Adam says:";
+  const artPrompt = process.env.QUANTUM_PROMPT || "I";
   const artLimit = parseInt(process.env.QUANTUM_LIMIT || "50", 10);
   await bot.generateQuantumArt(artPrompt, artLimit);
   process.exit(0);
